@@ -1,0 +1,17 @@
+
+Go stuff
+
+- Avoid the syscall package. It's deprecated.
+- Prefer the os package over golang.org/x/sys/... where possible to avoid cross
+  platform implementation pain.
+- It may be easier to use C naming conventions for internal code?
+- A good implementation will need a very good byte buffer pool.
+
+
+Fuse specific notes
+- Every request has {id, uid, gid, pid, nodeid, opcode}. Do we want to make this
+  generally available/exposed?
+- Will we get better perf characteristics from a blocking or non-blocking fd?
+- Can locks be handled opaquely, or must they be exposed?
+- Stat structs vary across OS implementations. Commonality?
+
