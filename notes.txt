@@ -1,4 +1,10 @@
 
+Project
+- Document not just how to use our library, but provide a much needed guide on
+  how each fuse API call should be implemented.
+- Provide a "TraceFS" implementation?
+
+
 Go stuff
 
 - Avoid the syscall package. It's deprecated.
@@ -6,6 +12,7 @@ Go stuff
   platform implementation pain.
 - It may be easier to use C naming conventions for internal code?
 - A good implementation will need a very good byte buffer pool.
+- Use go style errors, not syscall numbers. Keep it idiomatic.
 
 
 Fuse specific notes
@@ -15,3 +22,9 @@ Fuse specific notes
 - Can locks be handled opaquely, or must they be exposed?
 - Stat structs vary across OS implementations. Commonality?
 
+
+Links
+- http://man7.org/linux/man-pages/man4/fuse.4.html
+- http://ptspts.blogspot.com/2009/11/fuse-protocol-tutorial-for-linux-26.html
+- https://www.kernel.org/doc/Documentation/filesystems/fuse.txt
+- https://github.com/libfuse/libfuse
