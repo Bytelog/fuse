@@ -16,6 +16,7 @@ Go stuff
 
 
 Fuse specific notes
+- We should open /dev/fuse instead of creating a socket pair.
 - Every request has {id, uid, gid, pid, nodeid, opcode}. Do we want to make this
   generally available/exposed?
 - Will we get better perf characteristics from a blocking or non-blocking fd?
