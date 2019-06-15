@@ -7,16 +7,17 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-func mount(target string) error {
-
+func mount(target string) (*net.UnixConn, error) {
+	return usermount(target, Options{})
 }
 
 func umount(target string) error {
-
+	return userumount(target, false)
 }
 
 func usermount(target string, options Options) (conn *net.UnixConn, err error) {
@@ -35,7 +36,11 @@ func usermount(target string, options Options) (conn *net.UnixConn, err error) {
 	cmd.Stderr = &stderr
 
 	if err = cmd.Run(); err != nil {
-		err = errors.New(stderr.String())
+		return nil, errors.New(stderr.String())
+	}
+
+	if err := connect(conn); err != nil {
+		return nil, err
 	}
 
 	return conn, err
@@ -54,6 +59,42 @@ func userumount(target string, lazy bool) error {
 	if err := cmd.Run(); err != nil {
 		return errors.New(stderr.String())
 	}
+	return nil
+}
+
+func connect(conn *net.UnixConn) error {
+	// dataLen is the number of bytes requires to encode an FD.
+	const dataLen = int(unsafe.Sizeof(int(0)) / unsafe.Sizeof(uintptr(0)))
+	oob := make([]byte, unix.CmsgSpace(dataLen))
+
+	_, n, _, _, err := conn.ReadMsgUnix(nil, oob)
+	if err != nil {
+		return err
+	}
+	if n < len(oob) {
+		return errors.New("short socket control message")
+	}
+
+	messages, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return err
+	}
+	if len(messages) == 0 {
+		return errors.New("no socket control message")
+	}
+
+	fds, err := unix.ParseUnixRights(&messages[0])
+	if err != nil {
+		return err
+	}
+
+	if len(fds) == 0 || fds[0] < 0 {
+		return errors.New("received bad fd")
+	}
+
+	unix.CloseOnExec(fds[0])
+	// TODO: Use!
+	panic(fds[0])
 	return nil
 }
 
@@ -90,6 +131,6 @@ func closeOnErr(closer io.Closer, err *error) {
 		panic("nil error")
 	}
 	if *err != nil {
-		*err = closer.Close()
+		_ = closer.Close()
 	}
 }

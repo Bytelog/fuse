@@ -5,7 +5,8 @@ import (
 )
 
 func TestMain(t *testing.T) {
-	if err := mount("/tmp/mnt", ""); err != nil {
+	if err := Serve("/tmp/mnt"); err != nil {
 		t.Fatalf("%v", err)
 	}
+	t.Fail()
 }
