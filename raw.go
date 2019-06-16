@@ -1,8 +1,12 @@
 package fuse
 
 import (
+	"fmt"
+	"io"
 	"net"
 	"os"
+	"sync"
+	"unsafe"
 )
 
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
@@ -54,15 +58,61 @@ func (s *Server) Serve(target string) error {
 	_ = umount(target)
 
 	// register the mount
-	conn, err := mount(target)
+	dev, err := mount(target)
 	if err != nil {
 		return err
 	}
 
 	defer umount(target)
-	return s.loop(conn)
+	return s.loop(dev)
 }
 
-func (s *Server) loop(conn *net.UnixConn) error {
-	return nil
+var pool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 0, 64*1024)
+	},
+}
+
+func (s *Server) loop(dev *os.File) (err error) {
+	defer closeErr(dev, &err)
+	// todo: deadlines?
+
+	// fuse_in_header + fuse_init_in
+
+	for {
+		b := pool.Get().([]byte)
+		n, _ := dev.Read(b[:cap(b)])
+		b = b[:n]
+
+		in := (*fuse_in_header)(unsafe.Pointer(&b[0]))
+		sz_skip := int(unsafe.Sizeof(fuse_in_header{}))
+
+		switch in.opcode {
+		case FUSE_INIT:
+			init := (*fuse_init_in)(unsafe.Pointer(&b[sz_skip]))
+			fmt.Printf("%+v", init)
+		default:
+			panic("unsupported")
+		}
+
+		return nil
+	}
+}
+
+func closeErr(closer io.Closer, err *error) {
+	if err == nil {
+		panic("nil error")
+	}
+	if cerr := closer.Close(); *err == nil {
+		*err = cerr
+	}
+}
+
+func closeOnErr(closer io.Closer, err *error) {
+	if err == nil {
+		panic("nil error")
+	}
+	if *err != nil {
+		_ = closer.Close()
+	}
 }

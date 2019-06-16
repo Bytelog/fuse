@@ -3,7 +3,6 @@ package fuse
 import (
 	"bytes"
 	"errors"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -11,7 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func mount(target string) (net.Conn, error) {
+func mount(target string) (*os.File, error) {
 	return usermount(target, Options{})
 }
 
@@ -19,7 +18,7 @@ func umount(target string) error {
 	return userumount(target, false)
 }
 
-func usermount(target string, options Options) (conn net.Conn, err error) {
+func usermount(target string, options Options) (dev *os.File, err error) {
 	pair, err := unixPair(unix.SOCK_STREAM)
 	if err != nil {
 		return nil, err
@@ -38,7 +37,12 @@ func usermount(target string, options Options) (conn net.Conn, err error) {
 		return nil, errors.New(stderr.String())
 	}
 
-	return connect(pair[0])
+	conn, err := net.FileConn(pair[0])
+	if err != nil {
+		return nil, err
+	}
+	defer closeErr(conn, &err)
+	return receiveDev(conn.(*net.UnixConn))
 }
 
 func userumount(target string, lazy bool) error {
@@ -57,46 +61,35 @@ func userumount(target string, lazy bool) error {
 	return nil
 }
 
-func connect(f *os.File) (conn net.Conn, err error) {
-	fuseConn, err := net.FileConn(f)
+func receiveDev(conn *net.UnixConn) (dev *os.File, err error) {
+	oob := make([]byte, unix.CmsgSpace(unix.SizeofInt))
+	_, n, _, _, err := conn.ReadMsgUnix(nil, oob)
 	if err != nil {
 		return nil, err
 	}
-	defer closeErr(fuseConn, &err)
-
-	fd, err := receiveFD(fuseConn.(*net.UnixConn))
-	return net.FileConn(os.NewFile(uintptr(fd), ""))
-}
-
-func receiveFD(conn *net.UnixConn) (fd int, err error) {
-	oob := make([]byte, unix.CmsgSpace(unix.SizeofInt)/unix.SizeofPtr)
-	_, n, _, _, err := conn.ReadMsgUnix(nil, oob)
-	if err != nil {
-		return 0, err
-	}
 	if n < len(oob) {
-		return 0, errors.New("short socket control message")
+		return nil, errors.New("short socket control message")
 	}
 
 	messages, err := unix.ParseSocketControlMessage(oob)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if len(messages) == 0 {
-		return 0, errors.New("no socket control message")
+		return nil, errors.New("no socket control message")
 	}
 
 	fds, err := unix.ParseUnixRights(&messages[0])
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if len(fds) == 0 || fds[0] < 0 {
-		return 0, errors.New("received bad fd")
+		return nil, errors.New("received bad fd")
 	}
 
 	unix.CloseOnExec(fds[0])
-	return fds[0], nil
+	return os.NewFile(uintptr(fds[0]), ""), nil
 }
 
 func unixPair(typ int) (pair [2]*os.File, err error) {
@@ -108,22 +101,4 @@ func unixPair(typ int) (pair [2]*os.File, err error) {
 	pair[0] = os.NewFile(uintptr(fds[0]), "")
 	pair[1] = os.NewFile(uintptr(fds[1]), "")
 	return
-}
-
-func closeErr(closer io.Closer, err *error) {
-	if err == nil {
-		panic("nil error")
-	}
-	if cerr := closer.Close(); *err == nil {
-		*err = cerr
-	}
-}
-
-func closeOnErr(closer io.Closer, err *error) {
-	if err == nil {
-		panic("nil error")
-	}
-	if *err != nil {
-		_ = closer.Close()
-	}
 }
