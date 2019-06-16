@@ -16,12 +16,14 @@ Go stuff
 
 
 Fuse specific notes
-- We should open /dev/fuse instead of creating a socket pair.
+- We should open /dev/fuse directly if possible, falling back to fusermount
 - Every request has {id, uid, gid, pid, nodeid, opcode}. Do we want to make this
   generally available/exposed?
-- Will we get better perf characteristics from a blocking or non-blocking fd?
 - Can locks be handled opaquely, or must they be exposed?
 - Stat structs vary across OS implementations. Commonality?
+- Every fuse request contains fuse_in_header, including the init request. What
+  is the maximum length of a fuse request? What's the smallest buffer size we
+  can get away with?
 
 
 Links
