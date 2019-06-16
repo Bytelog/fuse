@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -70,10 +69,7 @@ func connect(f *os.File) (conn net.Conn, err error) {
 }
 
 func receiveFD(conn *net.UnixConn) (fd int, err error) {
-	// dataLen is the number of bytes requires to encode an FD.
-	const dataLen = int(unsafe.Sizeof(int(0)) / unsafe.Sizeof(uintptr(0)))
-	oob := make([]byte, unix.CmsgSpace(dataLen))
-
+	oob := make([]byte, unix.CmsgSpace(unix.SizeofInt)/unix.SizeofPtr)
 	_, n, _, _, err := conn.ReadMsgUnix(nil, oob)
 	if err != nil {
 		return 0, err
