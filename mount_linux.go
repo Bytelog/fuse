@@ -89,7 +89,7 @@ func receiveDev(conn *net.UnixConn) (dev *os.File, err error) {
 	}
 
 	unix.CloseOnExec(fds[0])
-	return os.NewFile(uintptr(fds[0]), ""), nil
+	return os.NewFile(uintptr(fds[0]), "/dev/fuse"), nil
 }
 
 func unixPair(typ int) (pair [2]*os.File, err error) {
