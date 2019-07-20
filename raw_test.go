@@ -4,8 +4,9 @@ import (
 	"testing"
 )
 
-func TestMain(t *testing.T) {
-	if err := Serve("/tmp/mnt"); err != nil {
+func TestBasic(t *testing.T) {
+	fs := DefaultFilesystem{}
+	if err := Serve(&fs, "/tmp/mnt"); err != nil {
 		t.Fatalf("%v", err)
 	}
 	t.Fail()

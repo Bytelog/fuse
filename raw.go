@@ -9,6 +9,9 @@ import (
 	"unsafe"
 )
 
+// todo: open multiple connections to /dev/fuse to allow for multi-threading
+// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
+
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
 // we may want to not support all of these. Just listing them for now.
 type Options struct {
@@ -39,14 +42,16 @@ func (o Options) String() string {
 
 type Server struct {
 	target string
+	fs     Filesystem
 	conn   *net.UnixConn
 }
 
-func Serve(target string) error {
-	return (&Server{}).Serve(target)
+func Serve(fs Filesystem, target string) error {
+	return (&Server{fs: fs}).Serve(target)
 }
 
 func (s *Server) Serve(target string) error {
+
 	// create the mount directory
 	if _, err := os.Stat(target); os.IsNotExist(err) {
 		if err := os.Mkdir(target, 0777); err != nil {
@@ -75,27 +80,78 @@ var pool = sync.Pool{
 
 func (s *Server) loop(dev *os.File) (err error) {
 	defer closeErr(dev, &err)
+
+	const inSize = int(unsafe.Sizeof(fuse_in_header{}))
+	const outSize = int(unsafe.Sizeof(fuse_out_header{}))
+
 	// todo: deadlines?
-
-	// fuse_in_header + fuse_init_in
-
+	// todo: what's the max length we'll encounter?
+	// todo: what about recovering from errors?
+	buf := make([]byte, 1024)
 	for {
-		b := pool.Get().([]byte)
-		n, _ := dev.Read(b[:cap(b)])
-		b = b[:n]
-
-		in := (*fuse_in_header)(unsafe.Pointer(&b[0]))
-		sz_skip := int(unsafe.Sizeof(fuse_in_header{}))
-
-		switch in.opcode {
-		case FUSE_INIT:
-			init := (*fuse_init_in)(unsafe.Pointer(&b[sz_skip]))
-			fmt.Printf("%+v", init)
-		default:
-			panic("unsupported")
+		n, err := dev.Read(buf[:cap(buf)])
+		if err != nil {
+			return fmt.Errorf("reading fuse device: %v", err)
 		}
 
-		return nil
+		in := (*fuse_in_header)(unsafe.Pointer(&buf[0]))
+		if n < inSize || n < int(in.len) {
+			return fmt.Errorf("expected at least %d bytes, read %d", inSize, n)
+		}
+
+		if len(ops) < int(in.opcode) {
+			return fmt.Errorf("unsupported op: %d", in.opcode)
+		}
+
+		op := ops[in.opcode]
+
+		if op.handler == nil {
+			return fmt.Errorf("unsupported op: %d", in.opcode)
+		}
+
+		if op.outSize > 0 {
+			out := (*fuse_out_header)(unsafe.Pointer(&buf[op.inSize]))
+			*out = fuse_out_header{
+				// todo: len needs to check error
+				// todo: use error
+				len:    op.outSize,
+				unique: in.unique,
+			}
+		}
+
+		op.handler(s, unsafe.Pointer(&buf[0]), unsafe.Pointer(&buf[op.inSize]))
+
+		if op.outSize > 0 {
+			buf = buf[op.inSize : op.inSize+op.outSize]
+			if _, err := dev.Write(buf); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+type op struct {
+	handler func(s *Server, in, out unsafe.Pointer)
+	inSize  uint32
+	outSize uint32
+}
+
+var ops = [...]op{
+	FUSE_INIT: op{
+		handler: (*Server).handleInit,
+		inSize:  uint32(unsafe.Sizeof(fuse_init_in{})),
+		outSize: uint32(unsafe.Sizeof(fuse_init_out{})),
+	},
+}
+
+func (s *Server) handleInit(in, out unsafe.Pointer) {
+	req, resp := (*fuse_init_in)(in), (*fuse_init_out)(out)
+
+	*resp = fuse_init_out{
+		header:        resp.header,
+		major:         req.major,
+		minor:         req.minor,
+		max_readahead: req.max_readahead,
 	}
 }
 

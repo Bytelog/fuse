@@ -1,4 +1,4 @@
-module fuse
+module bytelog.org/fuse
 
 go 1.12
 
