@@ -7,13 +7,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func LoggingMiddleware(h HandlerFunc) HandlerFunc {
+	return func(req Requester, resp Responder) {
+		fmt.Printf("%s: %+v\n", req, req.Headers())
+		h(req, resp)
+	}
+}
+
 func TestBasic(t *testing.T) {
 	handler := func(req Requester, resp Responder) {
-		switch v := req.(type) {
-		case *InitRequest:
-			fmt.Printf("<%s>\n", req)
-		case *AccessRequest:
-			fmt.Println(v.UID, v.GID, v.PID)
+		switch req.(type) {
+		case *InitRequest, *AccessRequest:
 		default:
 			fmt.Println("UNHANDLED: ", req.String())
 			if err := resp.Reply(unix.ENOSYS); err != nil {
@@ -21,6 +25,9 @@ func TestBasic(t *testing.T) {
 			}
 		}
 	}
+
+	// attach logger
+	handler = LoggingMiddleware(handler)
 
 	if err := Serve(HandlerFunc(handler), "/tmp/mnt"); err != nil {
 		t.Fatalf("%v", err)
