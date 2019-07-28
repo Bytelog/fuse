@@ -137,14 +137,16 @@ func (ctx *Context) outData() unsafe.Pointer {
 }
 
 func (ctx *Context) request() *Request {
-	return (*Request)(ctx)
+	return (*Request)(unsafe.Pointer(ctx))
 }
 
 func (ctx *Context) response() *response {
-	return (*response)(ctx)
+	return (*response)(unsafe.Pointer(ctx))
 }
 
-type Request Context
+type Request struct {
+	Context
+}
 
 func (req *Request) Headers() *Header {
 	return (*Header)(unsafe.Pointer(req.Header))
@@ -158,14 +160,16 @@ func (req *Request) Interrupt() <-chan struct{} {
 	return nil
 }
 
-type response Context
+type response struct {
+	Context
+}
 
 func (resp *response) String() string {
 	return "RESPONSE_" + resp.Header.code.String()
 }
 
 func (resp *response) Reply(err unix.Errno) error {
-	return (*Context)(resp).reply(err)
+	return resp.reply(err)
 }
 
 type InitRequest struct {
@@ -232,7 +236,7 @@ func handleInit(ctx *Context) {
 			Flags:        in.Flags,
 		},
 		&InitResponse{
-			response: (*response)(ctx),
+			response: ctx.response(),
 		},
 	)
 }
@@ -253,7 +257,7 @@ func handleAccess(ctx *Context) {
 			Request: ctx.request(),
 			Mask:    in.Mask,
 		},
-		&AccessResponse{response: (*response)(ctx)},
+		&AccessResponse{response: ctx.response()},
 	)
 }
 
