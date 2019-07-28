@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 	"unsafe"
-
-	"bytelog.org/fuse/proto"
 )
 
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
@@ -70,7 +68,10 @@ func (s *Server) Serve(target string) error {
 		return err
 	}
 
-	defer umount(target)
+	defer func() {
+		dev.Close()
+		umount(target)
+	}()
 
 	sess := &session{
 		handler: s.handler,
@@ -79,16 +80,6 @@ func (s *Server) Serve(target string) error {
 		sem:     semaphore{avail: 1},
 	}
 	return sess.loop(dev)
-}
-
-// note: request struct should be pooled
-// note: all active requests will need to be in a map[id]*request or something
-// to facilitate interrupts.
-
-var pool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 64*1024)
-	},
 }
 
 // experimental option ideas
@@ -105,12 +96,14 @@ type opts struct {
 	// reclaimed
 	ReadTimeout time.Duration
 
-	// how long a request has to respond
+	// how long a Context has to respond
 	WriteTimeout time.Duration
 }
 
 var defaultOpts = opts{
-	CloneFD: true,
+	CloneFD:      true,
+	ReadTimeout:  time.Second,
+	WriteTimeout: time.Second,
 }
 
 type session struct {
@@ -134,12 +127,7 @@ func (s *session) loop(dev *os.File) error {
 		dev:  dev,
 	}
 
-	if err := c.accept(); err != nil {
-		panic(err)
-	}
-	if err := c.accept(); err != nil {
-		panic(err)
-	}
+	c.poll()
 	return nil
 }
 
@@ -159,6 +147,8 @@ func (c *conn) poll() {
 	}
 }
 
+var ctxPool sync.Pool
+
 func (c *conn) accept() (err error) {
 	defer closeOnErr(c.dev, &err)
 
@@ -167,27 +157,55 @@ func (c *conn) accept() (err error) {
 		// bumping number of workers based on some heuristic
 		deadline := time.Now().Add(c.sess.opts.ReadTimeout)
 		if err := c.dev.SetReadDeadline(deadline); err != nil {
-			return err
+			panic(err)
 		}
 	}
 
-	buf := pool.Get().([]byte)[:]
-	n, err := c.dev.Read(buf[:cap(buf)])
+	ctx := c.acquireCtx()
+	n, err := c.dev.Read(ctx.buf[:cap(ctx.buf)])
 	if err != nil {
 		return fmt.Errorf("failed read from fuse device: %w", err)
 	}
 
-	req := &request{
-		header: (*proto.InHeader)(unsafe.Pointer(&buf[0])),
-		conn:   c,
-		buf:    buf,
+	if n < int(headerInSize) || n < int(ctx.Header.len) {
+		return fmt.Errorf("unexpected Context size: %d", n)
 	}
 
-	if n < int(headerInSize) || n < int(req.header.Len) {
-		return fmt.Errorf("unexpected request size: %d", n)
+	code := ctx.Header.code
+	if int(code) < len(ops) && ops[code] != nil {
+		go func() {
+			ops[code](ctx)
+			// the user implementation is not required to call Reply.
+			if !ctx.closed {
+				if err := ctx.reply(0); err != nil {
+					// todo: log err
+					panic(err)
+				}
+			}
+			c.releaseCtx(ctx)
+		}()
+		return nil
 	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedOp, code)
+}
 
-	return handle(req)
+func (c *conn) acquireCtx() (ctx *Context) {
+	v := ctxPool.Get()
+	if v == nil {
+		ctx = &Context{
+			buf: make([]byte, 64*1024),
+		}
+		ctx.Header = (*Header)(unsafe.Pointer(&ctx.buf[0]))
+	} else {
+		ctx = v.(*Context)
+	}
+	ctx.replySize = 0
+	ctx.conn = c
+	return ctx
+}
+
+func (c *conn) releaseCtx(r *Context) {
+	ctxPool.Put(r)
 }
 
 func closeErr(closer io.Closer, err *error) {

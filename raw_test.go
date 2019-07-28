@@ -2,23 +2,27 @@ package fuse
 
 import (
 	"fmt"
-	"os"
 	"testing"
-	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestBasic(t *testing.T) {
-	fs := DefaultFilesystem{}
-	go func() {
-		if err := Serve(&fs, "/tmp/mnt"); err != nil {
-			t.Fatalf("%v", err)
+	handler := func(req Requester, resp Responder) {
+		switch v := req.(type) {
+		case *InitRequest:
+			fmt.Printf("<%s>\n", req)
+		case *AccessRequest:
+			fmt.Println(v.UID, v.GID, v.PID)
+		default:
+			fmt.Println("UNHANDLED: ", req.String())
+			if err := resp.Reply(unix.ENOSYS); err != nil {
+				panic(err)
+			}
 		}
-	}()
+	}
 
-	fmt.Println("wait")
-	time.Sleep(time.Second)
-	f, err := os.Open("/tmp/mnt")
-	fmt.Println(f, err)
-	time.Sleep(time.Second * 10)
-	t.Fail()
+	if err := Serve(HandlerFunc(handler), "/tmp/mnt"); err != nil {
+		t.Fatalf("%v", err)
+	}
 }

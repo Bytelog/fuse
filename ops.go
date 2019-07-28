@@ -2,9 +2,6 @@ package fuse
 
 import (
 	"errors"
-	"fmt"
-	"io"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -14,8 +11,8 @@ import (
 )
 
 var (
-	ErrWriteAfterClose = errors.New("fuse: invalid write on closed request")
-	ErrUnsupportedOp   = errors.New("fuse: unsupported op")
+	ErrClosedWrite   = errors.New("fuse: invalid write on closed Context")
+	ErrUnsupportedOp = errors.New("fuse: unsupported op")
 )
 
 const (
@@ -23,11 +20,61 @@ const (
 	headerOutSize = uint32(unsafe.Sizeof(proto.OutHeader{}))
 )
 
+type operation func(*Context)
+
+var ops = [...]operation{
+	// proto.LOOKUP:          handleLookup,
+	// proto.FORGET:          handleForget,
+	// proto.GETATTR:         handleGetattr,
+	// proto.SETATTR:         handleSetattr,
+	// proto.READLINK:        handleReadlink,
+	// proto.SYMLINK:         handleSymlink,
+	// proto.MKNOD:           handleMknod,
+	// proto.MKDIR:           handleMkdir,
+	// proto.UNLINK:          handleUnlink,
+	// proto.RMDIR:           handleRmdir,
+	// proto.RENAME:          handleRename,
+	// proto.LINK:            handleLink,
+	// proto.OPEN:            handleOpen,
+	// proto.READ:            handleRead,
+	// proto.WRITE:           handleWrite,
+	// proto.STATFS:          handleStates,
+	// proto.RELEASE:         handleRelease,
+	// proto.FSYNC:           handleFsync,
+	// proto.SETXATTR:        handleSetxattr,
+	// proto.GETXATTR:        handleGetxattr,
+	// proto.LISTXATTR:       handleListxattr,
+	// proto.REMOVEXATTR:     handleRemovexattr,
+	// proto.FLUSH:           handleFlush,
+	proto.INIT: handleInit,
+	// proto.OPENDIR:         handleOpendir,
+	// proto.READDIR:         handleReaddir,
+	// proto.RELEASEDIR:      handleReleasedir,
+	// proto.FSYNCDIR:        handleFsyncdir,
+	// proto.GETLK:           handleGetlk,
+	// proto.SETLK:           handleSetlk,
+	// proto.SETLKW:          handleSetlk,
+	proto.ACCESS: handleAccess,
+	// proto.CREATE:          handleCreate,
+	// proto.INTERRUPT:       handleInterrupt,
+	// proto.BMAP:            handleBmap,
+	// proto.DESTROY: handleDestroy,
+	// proto.IOCTL:           handleIoctl,
+	// proto.POLL:            handlePoll,
+	// proto.NOTIFY_REPLY:    handleNotifyReply,
+	// proto.BATCH_FORGET:    handleBatchForget,
+	// proto.FALLOCATE:       handleFallocate,
+	// proto.READDIRPLUS:     handleReaddirplus,
+	// proto.RENAME2:         handleRename2,
+	// proto.LSEEK:           handleLseek,
+	// proto.COPY_FILE_RANGE: handleCopyFileRange,
+}
+
 var _ = [1]byte{unsafe.Sizeof(Header{}) - unsafe.Sizeof(proto.InHeader{}): 0}
 
 type Header struct {
 	len  uint32
-	op   proto.OpCode
+	code proto.OpCode
 	ID   uint64
 	Node uint64
 	UID  uint32
@@ -36,124 +83,105 @@ type Header struct {
 	_    uint32
 }
 
-type request struct {
-	header *proto.InHeader
+type Context struct {
+	*Header
 
-	w      io.Writer
-	conn   *conn
-	buf    []byte
-	closed uint32
+	conn      *conn
+	buf       []byte
+	replySize uint32
+	closed    bool
 }
 
-func (r *request) Header() *Header {
-	return (*Header)(unsafe.Pointer(r.header))
-}
-
-func (r *request) String() string {
-	return r.header.OpCode.String()
-}
-
-func (r *request) Interrupt() <-chan struct{} {
-	return nil
-}
-
-func (r *request) data() unsafe.Pointer {
-	return unsafe.Pointer(&r.buf[headerInSize])
-}
-
-func (r *request) outHeader() *proto.OutHeader {
-	return (*proto.OutHeader)(unsafe.Pointer(&r.buf[r.header.Len]))
-}
-
-func (r *request) outData() unsafe.Pointer {
-	return unsafe.Pointer(&r.buf[r.header.Len+headerOutSize])
-}
-
-func (r *request) reply(size uint32, err error) error {
-	// prevent accidental double writes
-	if !atomic.CompareAndSwapUint32(&r.closed, 0, 1) {
-		return ErrWriteAfterClose
+func (ctx *Context) reply(err unix.Errno) error {
+	if ctx.closed {
+		return ErrClosedWrite
 	}
 
-	defer pool.Put(r.buf)
-
-	header := r.outHeader()
+	header := ctx.outHeader()
 	*header = proto.OutHeader{
 		Len:    headerOutSize,
-		Unique: r.header.Unique,
+		Unique: ctx.Header.ID,
 	}
 
-	if err == nil {
-		header.Len += size
+	if err == 0 {
+		header.Len += ctx.replySize
 	} else {
-		// todo: map error to errno
-		header.Error = -int32(unix.ENOSYS)
+		header.Error = -int32(err)
 	}
 
-	if r.conn.sess.opts.WriteTimeout > 0 {
-		deadline := time.Now().Add(r.conn.sess.opts.WriteTimeout)
-		if err := r.conn.dev.SetWriteDeadline(deadline); err != nil {
-			return err
+	if ctx.conn.sess.opts.WriteTimeout > 0 {
+		deadline := time.Now().Add(ctx.conn.sess.opts.WriteTimeout)
+		if err := ctx.conn.dev.SetWriteDeadline(deadline); err != nil {
+			panic(err)
 		}
 	}
 
-	_, err = r.conn.dev.Write(r.buf[r.header.Len : r.header.Len+header.Len])
-	return err
+	p := ctx.buf[ctx.Header.len : ctx.Header.len+header.Len]
+	if _, err := ctx.conn.dev.Write(p); err != nil {
+		return err
+	}
+	ctx.closed = true
+	return nil
 }
 
-func (r *request) responder(size uintptr) responder {
-	return responder{request: r, size: uint32(size)}
+func (ctx *Context) data() unsafe.Pointer {
+	return unsafe.Pointer(&ctx.buf[headerInSize])
 }
 
-type responder struct {
-	*request
-	size uint32
+func (ctx *Context) outHeader() *proto.OutHeader {
+	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.Header.len]))
 }
 
-func (r *responder) Reply() error {
-	return r.reply(r.size, nil)
+func (ctx *Context) outData() unsafe.Pointer {
+	return unsafe.Pointer(&ctx.buf[ctx.Header.len+headerOutSize])
 }
 
-func (r *responder) ReplyErr(err error) error {
-	return r.reply(0, err)
+func (ctx *Context) request() *Request {
+	return (*Request)(ctx)
+}
+
+func (ctx *Context) response() *response {
+	return (*response)(ctx)
+}
+
+type Request Context
+
+func (req *Request) Headers() *Header {
+	return (*Header)(unsafe.Pointer(req.Header))
+}
+
+func (req *Request) String() string {
+	return "REQUEST_" + req.Header.code.String()
+}
+
+func (req *Request) Interrupt() <-chan struct{} {
+	return nil
+}
+
+type response Context
+
+func (resp *response) String() string {
+	return "RESPONSE_" + resp.Header.code.String()
+}
+
+func (resp *response) Reply(err unix.Errno) error {
+	return (*Context)(resp).reply(err)
 }
 
 type InitRequest struct {
+	*Request
 	Major        uint32
 	Minor        uint32
 	MaxReadahead uint32
 	Flags        uint32
-	responder
 }
 
-type DestroyRequest struct {
-	responder
+type InitResponse struct {
+	*response
 }
 
-type ForgetRequest struct {
-	*request
-}
-
-func handle(req *request) error {
-	code := req.header.OpCode
-	if int(code) < len(ops) && ops[code] != nil {
-		ops[code](req)
-		return nil
-	}
-	return fmt.Errorf("%w: %s", ErrUnsupportedOp, code)
-}
-
-// rules imposed on operation handler:
-// - must not retain references
-type operation func(*request)
-
-var ops = [...]operation{
-	proto.INIT: handleInit,
-}
-
-// / todo: consider concurrent access?
-func handleInit(req *request) {
-	in, out := (*proto.InitIn)(req.data()), (*proto.InitOut)(req.outData())
+func handleInit(ctx *Context) {
+	in, out := (*proto.InitIn)(ctx.data()), (*proto.InitOut)(ctx.outData())
 
 	*out = proto.InitOut{
 		Major: proto.KERNEL_VERSION,
@@ -175,7 +203,7 @@ func handleInit(req *request) {
 		// todo: determine bufsize from max_pages?
 
 		out.MaxReadahead = in.MaxReadahead
-		req.conn.sess.flags |= in.Flags
+		ctx.conn.sess.flags |= in.Flags
 	}
 
 	if in.Minor >= 14 {
@@ -194,11 +222,52 @@ func handleInit(req *request) {
 	out.MaxReadahead = 65536
 	out.MaxWrite = 65536
 
-	req.conn.sess.handler.Init(&InitRequest{
-		Major:        in.Major,
-		Minor:        in.Minor,
-		MaxReadahead: in.MaxReadahead,
-		Flags:        in.Flags,
-		responder:    req.responder(unsafe.Sizeof(proto.InitOut{})),
-	})
+	ctx.replySize = uint32(unsafe.Sizeof(proto.InitOut{}))
+	ctx.conn.sess.handler.Init(
+		&InitRequest{
+			Request:      ctx.request(),
+			Major:        in.Major,
+			Minor:        in.Minor,
+			MaxReadahead: in.MaxReadahead,
+			Flags:        in.Flags,
+		},
+		&InitResponse{
+			response: (*response)(ctx),
+		},
+	)
+}
+
+type AccessRequest struct {
+	*Request
+	Mask uint32
+}
+
+type AccessResponse struct {
+	*response
+}
+
+func handleAccess(ctx *Context) {
+	in := (*proto.AccessIn)(ctx.data())
+	ctx.conn.sess.handler.Access(
+		&AccessRequest{
+			Request: ctx.request(),
+			Mask:    in.Mask,
+		},
+		&AccessResponse{response: (*response)(ctx)},
+	)
+}
+
+type DestroyRequest struct {
+	*Request
+}
+
+type DestroyResponse struct {
+	*response
+}
+
+func handleDestroy(ctx *Context) {
+	ctx.conn.sess.handler.Destroy(
+		&DestroyRequest{Request: ctx.request()},
+		&DestroyResponse{response: ctx.response()},
+	)
 }

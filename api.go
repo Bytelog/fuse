@@ -1,68 +1,62 @@
 package fuse
 
 import (
-	"errors"
-	"fmt"
+	"golang.org/x/sys/unix"
 )
 
-var (
-	ErrReplyUnsupported = errors.New("fuse: operation does not support reply")
-)
-
-type Request interface {
-	Header() *Header
+type Requester interface {
+	Headers() *Header
 	Interrupt() <-chan struct{}
 	String() string
 }
 
-type Response interface {
-	ReplyErr(err error) error
+type Responder interface {
+	Reply(unix.Errno) error
+	String() string
 }
 
 type Handler interface {
-	Init(*InitRequest)
-	Destroy(*DestroyRequest)
+	Init(*InitRequest, *InitResponse)
+	Destroy(*DestroyRequest, *DestroyResponse)
+	Access(*AccessRequest, *AccessResponse)
 
 	/*
-		Destroy(Request)
-			Lookup(r Request, name string) (EntryOut, error)
-			Forget(r Request, lookups uint64)
+		Lookup(r Request, name string) (EntryOut, error)
+		Forget(r Request, lookups uint64)
 
-			GetAttr(r Request, flags uint32, fh uint64) (AttrOut, error)
-			SetAttr(r Request, in SetAttrIn) (AttrOut, error)
+		GetAttr(r Request, flags uint32, fh uint64) (AttrOut, error)
+		SetAttr(r Request, in SetAttrIn) (AttrOut, error)
 
-			Readlink(r Request) ([]byte, error)
-			Symlink(r Request, name, target string) (EntryOut, error)
+		Readlink(r Request) ([]byte, error)
+		Symlink(r Request, name, target string) (EntryOut, error)
 
-			Mknod(r Request, name string, mode os.FileMode, dev uint32) (EntryOut, error)
-			Mkdir(r Request, name string, mode os.FileMode) (EntryOut, error)
+		Mknod(r Request, name string, mode os.FileMode, dev uint32) (EntryOut, error)
+		Mkdir(r Request, name string, mode os.FileMode) (EntryOut, error)
 
-			Unlink(r Request, name string) error
-			Rmdir(r Request, name string) error
+		Unlink(r Request, name string) error
+		Rmdir(r Request, name string) error
 
-			// todo: make it clear that parent is the target's new inode.
-			Rename(r Request, name string, parent uint64, target string) (EntryOut, error)
+		// todo: make it clear that parent is the target's new inode.
+		Rename(r Request, name string, parent uint64, target string) (EntryOut, error)
 
-			Link(r Request, parent uint64, target string) (EntryOut, error)
-			// Open(r Request, flags uint32) (fh uint64, flags uint32, err error)
+		Link(r Request, parent uint64, target string) (EntryOut, error)
+		// Open(r Request, flags uint32) (fh uint64, flags uint32, err error)
 
-			Read(r Request, fh uint64, offset int64, size uint32) ([]byte, error)
-			Write(r Request, fh uint64, offset int64, data []byte, flags uint32) (uint32, error)
+		Read(r Request, fh uint64, offset int64, size uint32) ([]byte, error)
+		Write(r Request, fh uint64, offset int64, data []byte, flags uint32) (uint32, error)
 	*/
 }
 
 var _ Handler = HandlerFunc(nil)
 
-type HandlerFunc func(Request, Response)
+type HandlerFunc func(Requester, Responder)
 
-type noResponse struct {
-	req Request
-}
+func (f HandlerFunc) Init(req *InitRequest, resp *InitResponse)          { f(req, resp) }
+func (f HandlerFunc) Access(req *AccessRequest, resp *AccessResponse)    { f(req, resp) }
+func (f HandlerFunc) Destroy(req *DestroyRequest, resp *DestroyResponse) { f(req, resp) }
 
-func (e noResponse) ReplyErr(_ error) error {
-	return fmt.Errorf("%w: %s", ErrReplyUnsupported, e.req.String())
-}
-
-func (f HandlerFunc) Init(req *InitRequest)       { f(req, req) }
-func (f HandlerFunc) Destroy(req *DestroyRequest) { f(req, req) }
-func (f HandlerFunc) Forget(req *ForgetRequest)   { f(req, noResponse{req}) }
+var DefaultFilesystem = HandlerFunc(func(_ Requester, resp Responder) {
+	if err := resp.Reply(unix.ENOSYS); err != nil {
+		panic(err)
+	}
+})
