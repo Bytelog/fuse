@@ -75,8 +75,8 @@ func receiveDev(conn *net.UnixConn) (dev *os.File, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(messages) == 0 {
-		return nil, errors.New("no socket control message")
+	if len(messages) != 1 {
+		return nil, errors.New("bad socket control message")
 	}
 
 	fds, err := unix.ParseUnixRights(&messages[0])
@@ -84,10 +84,13 @@ func receiveDev(conn *net.UnixConn) (dev *os.File, err error) {
 		return nil, err
 	}
 
-	if len(fds) == 0 || fds[0] < 0 {
+	if len(fds) != 1 || fds[0] < 0 {
 		return nil, errors.New("received bad fd")
 	}
 
+	if err := unix.SetNonblock(fds[0], true); err != nil {
+		return nil, err
+	}
 	unix.CloseOnExec(fds[0])
 	return os.NewFile(uintptr(fds[0]), "/dev/fuse"), nil
 }

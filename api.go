@@ -1,79 +1,68 @@
 package fuse
 
-type RequestHandler func()
+import (
+	"errors"
+	"fmt"
+)
 
-type ResponseHandler func()
+var (
+	ErrReplyUnsupported = errors.New("fuse: operation does not support reply")
+)
 
-type Timespec struct{}
-
-type Request struct {
-	// The Inode ID tracked by the fuse client.
-	NodeID uint64
-
-	// UID of the requesting process.
-	UID uint32
-
-	// GID of the requesting process.
-	GID uint32
-
-	// PID of the requesting process.
-	PID uint32
+type Request interface {
+	Header() *Header
+	Interrupt() <-chan struct{}
+	String() string
 }
 
-type EntryOut struct{}
-
-type AttrOut struct{}
-
-type SetAttrIn struct{}
-
-type Link struct {
-	NodeID uint64
-	Name   string
+type Response interface {
+	ReplyErr(err error) error
 }
 
-// entry should have generation, nodeid, attr timeout, entry timeout
-// attr should have attr timeout
-
-// todo: mknod, mkdir and create have a umask argument. This can be abstracted
-// away by applying the umask immediately, but is there a reason to make the raw
-// mode or the raw umask available? umasks aren't even available in bsd-likes,
-// and certainly not windows.
-
-// todo: type conversions - use golang int sizes where idiomatic and convertable
-
-type Filesystem interface {
-	Init(Request)
-	Destroy(Request)
+type Handler interface {
+	Init(*InitRequest)
+	Destroy(*DestroyRequest)
 
 	/*
-		Lookup(r Request, name string) (EntryOut, error)
-		Forget(r Request, lookups uint64)
+		Destroy(Request)
+			Lookup(r Request, name string) (EntryOut, error)
+			Forget(r Request, lookups uint64)
 
-		GetAttr(r Request, flags uint32, fh uint64) (AttrOut, error)
-		SetAttr(r Request, in SetAttrIn) (AttrOut, error)
+			GetAttr(r Request, flags uint32, fh uint64) (AttrOut, error)
+			SetAttr(r Request, in SetAttrIn) (AttrOut, error)
 
-		Readlink(r Request) ([]byte, error)
-		Symlink(r Request, name, target string) (EntryOut, error)
+			Readlink(r Request) ([]byte, error)
+			Symlink(r Request, name, target string) (EntryOut, error)
 
-		Mknod(r Request, name string, mode os.FileMode, dev uint32) (EntryOut, error)
-		Mkdir(r Request, name string, mode os.FileMode) (EntryOut, error)
+			Mknod(r Request, name string, mode os.FileMode, dev uint32) (EntryOut, error)
+			Mkdir(r Request, name string, mode os.FileMode) (EntryOut, error)
 
-		Unlink(r Request, name string) error
-		Rmdir(r Request, name string) error
+			Unlink(r Request, name string) error
+			Rmdir(r Request, name string) error
 
-		// todo: make it clear that parent is the target's new inode.
-		Rename(r Request, name string, parent uint64, target string) (EntryOut, error)
+			// todo: make it clear that parent is the target's new inode.
+			Rename(r Request, name string, parent uint64, target string) (EntryOut, error)
 
-		Link(r Request, parent uint64, target string) (EntryOut, error)
-		// Open(r Request, flags uint32) (fh uint64, flags uint32, err error)
+			Link(r Request, parent uint64, target string) (EntryOut, error)
+			// Open(r Request, flags uint32) (fh uint64, flags uint32, err error)
 
-		Read(r Request, fh uint64, offset int64, size uint32) ([]byte, error)
-		Write(r Request, fh uint64, offset int64, data []byte, flags uint32) (uint32, error)
+			Read(r Request, fh uint64, offset int64, size uint32) ([]byte, error)
+			Write(r Request, fh uint64, offset int64, data []byte, flags uint32) (uint32, error)
 	*/
 }
 
-type DefaultFilesystem struct{}
+var _ Handler = HandlerFunc(nil)
 
-func (fs *DefaultFilesystem) Init(Request) {}
+type HandlerFunc func(Request, Response)
 
-func (fs *DefaultFilesystem) Destroy(Request) {}
+type noResponse struct {
+	req Request
+}
+
+func (e noResponse) ReplyErr(_ error) error {
+	return fmt.Errorf("%w: %s", ErrReplyUnsupported, e.req.String())
+}
+
+func (f HandlerFunc) Init(req *InitRequest)       { f(req, req) }
+func (f HandlerFunc) Destroy(req *DestroyRequest) { f(req, req) }
+func (f HandlerFunc) Forget(req *ForgetRequest)   { f(req, noResponse{req}) }

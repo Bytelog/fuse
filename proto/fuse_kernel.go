@@ -141,7 +141,7 @@
  *  - add WRITE_KILL_PRIV flag
  */
 
-package protocol
+package proto
 
 import "unsafe"
 
@@ -398,115 +398,124 @@ const (
 type OpCode uint32
 
 func (code OpCode) String() string {
-	return opCodeText[code]
+	if int(code) < len(opCodeText) && opCodeText[code] != "" {
+		return opCodeText[code]
+	}
+	if code == CUSE_INIT {
+		return "CUSE_INIT"
+	}
+	return "UNKNOWN"
 }
 
+// FUSE operation codes
 const (
-	OP_LOOKUP          = OpCode(1)
-	OP_FORGET          = OpCode(2) // no reply
-	OP_GETATTR         = OpCode(3)
-	OP_SETATTR         = OpCode(4)
-	OP_READLINK        = OpCode(5)
-	OP_SYMLINK         = OpCode(6)
-	OP_MKNOD           = OpCode(8)
-	OP_MKDIR           = OpCode(9)
-	OP_UNLINK          = OpCode(10)
-	OP_RMDIR           = OpCode(11)
-	OP_RENAME          = OpCode(12)
-	OP_LINK            = OpCode(13)
-	OP_OPEN            = OpCode(14)
-	OP_READ            = OpCode(15)
-	OP_WRITE           = OpCode(16)
-	OP_STATFS          = OpCode(17)
-	OP_RELEASE         = OpCode(18)
-	OP_FSYNC           = OpCode(20)
-	OP_SETXATTR        = OpCode(21)
-	OP_GETXATTR        = OpCode(22)
-	OP_LISTXATTR       = OpCode(23)
-	OP_REMOVEXATTR     = OpCode(24)
-	OP_FLUSH           = OpCode(25)
-	OP_INIT            = OpCode(26)
-	OP_OPENDIR         = OpCode(27)
-	OP_READDIR         = OpCode(28)
-	OP_RELEASEDIR      = OpCode(29)
-	OP_FSYNCDIR        = OpCode(30)
-	OP_GETLK           = OpCode(31)
-	OP_SETLK           = OpCode(32)
-	OP_SETLKW          = OpCode(33)
-	OP_ACCESS          = OpCode(34)
-	OP_CREATE          = OpCode(35)
-	OP_INTERRUPT       = OpCode(36)
-	OP_BMAP            = OpCode(37)
-	OP_DESTROY         = OpCode(38)
-	OP_IOCTL           = OpCode(39)
-	OP_POLL            = OpCode(40)
-	OP_NOTIFY_REPLY    = OpCode(41)
-	OP_BATCH_FORGET    = OpCode(42)
-	OP_FALLOCATE       = OpCode(43)
-	OP_READDIRPLUS     = OpCode(44)
-	OP_RENAME2         = OpCode(45)
-	OP_LSEEK           = OpCode(46)
-	OP_COPY_FILE_RANGE = OpCode(47)
-
-	// CUSE specific operations
-	CUSE_OP_INIT = OpCode(4096)
+	LOOKUP          = OpCode(1)
+	FORGET          = OpCode(2) // no reply
+	GETATTR         = OpCode(3)
+	SETATTR         = OpCode(4)
+	READLINK        = OpCode(5)
+	SYMLINK         = OpCode(6)
+	MKNOD           = OpCode(8)
+	MKDIR           = OpCode(9)
+	UNLINK          = OpCode(10)
+	RMDIR           = OpCode(11)
+	RENAME          = OpCode(12)
+	LINK            = OpCode(13)
+	OPEN            = OpCode(14)
+	READ            = OpCode(15)
+	WRITE           = OpCode(16)
+	STATFS          = OpCode(17)
+	RELEASE         = OpCode(18)
+	FSYNC           = OpCode(20)
+	SETXATTR        = OpCode(21)
+	GETXATTR        = OpCode(22)
+	LISTXATTR       = OpCode(23)
+	REMOVEXATTR     = OpCode(24)
+	FLUSH           = OpCode(25)
+	INIT            = OpCode(26)
+	OPENDIR         = OpCode(27)
+	READDIR         = OpCode(28)
+	RELEASEDIR      = OpCode(29)
+	FSYNCDIR        = OpCode(30)
+	GETLK           = OpCode(31)
+	SETLK           = OpCode(32)
+	SETLKW          = OpCode(33)
+	ACCESS          = OpCode(34)
+	CREATE          = OpCode(35)
+	INTERRUPT       = OpCode(36)
+	BMAP            = OpCode(37)
+	DESTROY         = OpCode(38)
+	IOCTL           = OpCode(39)
+	POLL            = OpCode(40)
+	NOTIFY_REPLY    = OpCode(41)
+	BATCH_FORGET    = OpCode(42)
+	FALLOCATE       = OpCode(43)
+	READDIRPLUS     = OpCode(44)
+	RENAME2         = OpCode(45)
+	LSEEK           = OpCode(46)
+	COPY_FILE_RANGE = OpCode(47)
 )
 
-var opCodeText = map[OpCode]string{
-	OP_LOOKUP:          "LOOKUP",
-	OP_FORGET:          "FORGET",
-	OP_GETATTR:         "GETATTR",
-	OP_SETATTR:         "SETATTR",
-	OP_READLINK:        "READLINK",
-	OP_SYMLINK:         "SYMLINK",
-	OP_MKNOD:           "MKNOD",
-	OP_MKDIR:           "MKDIR",
-	OP_UNLINK:          "UNLINK",
-	OP_RMDIR:           "RMDIR",
-	OP_RENAME:          "RENAME",
-	OP_LINK:            "LINK",
-	OP_OPEN:            "OPEN",
-	OP_READ:            "READ",
-	OP_WRITE:           "WRITE",
-	OP_STATFS:          "STATFS",
-	OP_RELEASE:         "RELEASE",
-	OP_FSYNC:           "FSYNC",
-	OP_SETXATTR:        "SETXATTR",
-	OP_GETXATTR:        "GETXATTR",
-	OP_LISTXATTR:       "LISTXATTR",
-	OP_REMOVEXATTR:     "REMOVEXATTR",
-	OP_FLUSH:           "FLUSH",
-	OP_INIT:            "INIT",
-	OP_OPENDIR:         "OPENDIR",
-	OP_READDIR:         "READDIR",
-	OP_RELEASEDIR:      "RELEASEDIR",
-	OP_FSYNCDIR:        "FSYNCDIR",
-	OP_GETLK:           "GETLK",
-	OP_SETLK:           "SETLK",
-	OP_SETLKW:          "SETLKW",
-	OP_ACCESS:          "ACCESS",
-	OP_CREATE:          "CREATE",
-	OP_INTERRUPT:       "INTERRUPT",
-	OP_BMAP:            "BMAP",
-	OP_DESTROY:         "DESTROY",
-	OP_IOCTL:           "IOCTL",
-	OP_POLL:            "POLL",
-	OP_NOTIFY_REPLY:    "NOTIFY_REPLY",
-	OP_BATCH_FORGET:    "BATCH_FORGET",
-	OP_FALLOCATE:       "FALLOCATE",
-	OP_READDIRPLUS:     "READDIRPLUS",
-	OP_RENAME2:         "RENAME2",
-	OP_LSEEK:           "LSEEK",
-	OP_COPY_FILE_RANGE: "COPY_FILE_RANGE",
+// CUSE specific operations
+const (
+	CUSE_INIT = OpCode(4096)
+)
 
-	// CUSE specific operations
-	CUSE_OP_INIT: "CUSE_INIT",
+var opCodeText = [...]string{
+	LOOKUP:          "LOOKUP",
+	FORGET:          "FORGET",
+	GETATTR:         "GETATTR",
+	SETATTR:         "SETATTR",
+	READLINK:        "READLINK",
+	SYMLINK:         "SYMLINK",
+	MKNOD:           "MKNOD",
+	MKDIR:           "MKDIR",
+	UNLINK:          "UNLINK",
+	RMDIR:           "RMDIR",
+	RENAME:          "RENAME",
+	LINK:            "LINK",
+	OPEN:            "OPEN",
+	READ:            "READ",
+	WRITE:           "WRITE",
+	STATFS:          "STATFS",
+	RELEASE:         "RELEASE",
+	FSYNC:           "FSYNC",
+	SETXATTR:        "SETXATTR",
+	GETXATTR:        "GETXATTR",
+	LISTXATTR:       "LISTXATTR",
+	REMOVEXATTR:     "REMOVEXATTR",
+	FLUSH:           "FLUSH",
+	INIT:            "INIT",
+	OPENDIR:         "OPENDIR",
+	READDIR:         "READDIR",
+	RELEASEDIR:      "RELEASEDIR",
+	FSYNCDIR:        "FSYNCDIR",
+	GETLK:           "GETLK",
+	SETLK:           "SETLK",
+	SETLKW:          "SETLKW",
+	ACCESS:          "ACCESS",
+	CREATE:          "CREATE",
+	INTERRUPT:       "INTERRUPT",
+	BMAP:            "BMAP",
+	DESTROY:         "DESTROY",
+	IOCTL:           "IOCTL",
+	POLL:            "POLL",
+	NOTIFY_REPLY:    "NOTIFY_REPLY",
+	BATCH_FORGET:    "BATCH_FORGET",
+	FALLOCATE:       "FALLOCATE",
+	READDIRPLUS:     "READDIRPLUS",
+	RENAME2:         "RENAME2",
+	LSEEK:           "LSEEK",
+	COPY_FILE_RANGE: "COPY_FILE_RANGE",
 }
 
 type NotifyCode int32
 
 func (code NotifyCode) String() string {
-	return notifyCodeText[code]
+	if int(code) < len(notifyCodeText) && notifyCodeText[code] != "" {
+		return notifyCodeText[code]
+	}
+	return "UNKNOWN"
 }
 
 const (
@@ -520,7 +529,7 @@ const (
 	NOTIFY_CODE_MAX    = iota
 )
 
-var notifyCodeText = map[NotifyCode]string{
+var notifyCodeText = [...]string{
 	NOTIFY_POLL:        "POLL",
 	NOTIFY_INVAL_INODE: "INVAL_INODE",
 	NOTIFY_INVAL_ENTRY: "INVAL_ENTRY",
@@ -839,7 +848,7 @@ type FallocateIn struct {
 
 type InHeader struct {
 	Len    uint32
-	Opcode uint32
+	OpCode OpCode
 	Unique uint64
 	Nodeid uint64
 	Uid    uint32

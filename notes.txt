@@ -16,6 +16,7 @@ Go stuff
 
 
 Fuse specific notes
+- On linux, the fuse fd can be cloned for reduced contention
 - We should open /dev/fuse directly if possible, falling back to fusermount
 - Every request has {id, uid, gid, pid, nodeid, opcode}. Do we want to make this
   generally available/exposed?
@@ -24,6 +25,17 @@ Fuse specific notes
 - Every fuse request contains fuse_in_header, including the init request. What
   is the maximum length of a fuse request? What's the smallest buffer size we
   can get away with?
+
+
+architecture notes
+
+1 Server: 1 Session: N Workers: N Requests
+
+Lifetimes
+    Server - serve to shutdown
+    Session - mount to unmount, each time new generation id
+    Worker - bounded by init to destroy, dynamic spinup
+    Request - serialized request -> response, unless async?
 
 
 Links

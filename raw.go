@@ -6,11 +6,11 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 	"unsafe"
-)
 
-// todo: open multiple connections to /dev/fuse to allow for multi-threading
-// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
+	"bytelog.org/fuse/proto"
+)
 
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
 // we may want to not support all of these. Just listing them for now.
@@ -41,13 +41,15 @@ func (o Options) String() string {
 }
 
 type Server struct {
-	target string
-	fs     Filesystem
-	conn   *net.UnixConn
+	target  string
+	handler Handler
+	conn    *net.UnixConn
+
+	session *session
 }
 
-func Serve(fs Filesystem, target string) error {
-	return (&Server{fs: fs}).Serve(target)
+func Serve(fs Handler, target string) error {
+	return (&Server{handler: fs}).Serve(target)
 }
 
 func (s *Server) Serve(target string) error {
@@ -69,98 +71,131 @@ func (s *Server) Serve(target string) error {
 	}
 
 	defer umount(target)
-	return s.loop(dev)
+
+	sess := &session{
+		handler: s.handler,
+		opts:    defaultOpts,
+		errc:    make(chan error, 1),
+		sem:     semaphore{avail: 1},
+	}
+	return sess.loop(dev)
 }
+
+// note: request struct should be pooled
+// note: all active requests will need to be in a map[id]*request or something
+// to facilitate interrupts.
 
 var pool = sync.Pool{
 	New: func() interface{} {
-		return make([]byte, 0, 64*1024)
+		return make([]byte, 64*1024)
 	},
 }
 
-func (s *Server) loop(dev *os.File) (err error) {
-	defer closeErr(dev, &err)
+// experimental option ideas
+type opts struct {
+	// control whether or not file descriptor cloning is enabled
+	// defaults to true
+	CloneFD bool
 
-	const inSize = int(unsafe.Sizeof(fuse_in_header{}))
-	const outSize = int(unsafe.Sizeof(fuse_out_header{}))
+	// how many polling threads to allow
+	MaxWorkers int
 
-	// todo: deadlines?
-	// todo: what's the max length we'll encounter?
-	// todo: what about recovering from errors?
-	buf := make([]byte, 1024)
+	// fuse timeout. sets how long to wait for kernel reads.
+	// after a timeout, a cloned descriptor is considered idle and may be
+	// reclaimed
+	ReadTimeout time.Duration
+
+	// how long a request has to respond
+	WriteTimeout time.Duration
+}
+
+var defaultOpts = opts{
+	CloneFD: true,
+}
+
+type session struct {
+	handler Handler
+	opts    opts
+	errc    chan error
+	flags   uint32
+
+	sem semaphore
+}
+
+func (s *session) loop(dev *os.File) error {
+	// todo: dynamic thread scaling
+
+	const threads = 4
+	// todo: open multiple connections to /dev/fuse to allow for multi-threading
+	// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
+
+	c := &conn{
+		sess: s,
+		dev:  dev,
+	}
+
+	if err := c.accept(); err != nil {
+		panic(err)
+	}
+	if err := c.accept(); err != nil {
+		panic(err)
+	}
+	return nil
+}
+
+type conn struct {
+	sess *session
+	dev  *os.File
+}
+
+// poll is a read loop. it waits for requests from the kernel and performs some
+// basic sanity checks before sending off to a handler. It is expected that the
+// session closes the connection's reader to terminate poll gracefully.
+func (c *conn) poll() {
 	for {
-		n, err := dev.Read(buf[:cap(buf)])
-		if err != nil {
-			return fmt.Errorf("reading fuse device: %v", err)
-		}
-
-		in := (*fuse_in_header)(unsafe.Pointer(&buf[0]))
-		if n < inSize || n < int(in.len) {
-			return fmt.Errorf("expected at least %d bytes, read %d", inSize, n)
-		}
-
-		if len(ops) < int(in.opcode) {
-			return fmt.Errorf("unsupported op: %d", in.opcode)
-		}
-
-		op := ops[in.opcode]
-
-		if op.handler == nil {
-			return fmt.Errorf("unsupported op: %d", in.opcode)
-		}
-
-		if op.outSize > 0 {
-			out := (*fuse_out_header)(unsafe.Pointer(&buf[op.inSize]))
-			*out = fuse_out_header{
-				// todo: len needs to check error
-				// todo: use error
-				len:    op.outSize,
-				unique: in.unique,
-			}
-		}
-
-		op.handler(s, unsafe.Pointer(&buf[0]), unsafe.Pointer(&buf[op.inSize]))
-
-		if op.outSize > 0 {
-			buf = buf[op.inSize : op.inSize+op.outSize]
-			if _, err := dev.Write(buf); err != nil {
-				return err
-			}
+		if err := c.accept(); err != nil {
+			panic(err)
 		}
 	}
 }
 
-type op struct {
-	handler func(s *Server, in, out unsafe.Pointer)
-	inSize  uint32
-	outSize uint32
-}
+func (c *conn) accept() (err error) {
+	defer closeOnErr(c.dev, &err)
 
-var ops = [...]op{
-	FUSE_INIT: op{
-		handler: (*Server).handleInit,
-		inSize:  uint32(unsafe.Sizeof(fuse_init_in{})),
-		outSize: uint32(unsafe.Sizeof(fuse_init_out{})),
-	},
-}
-
-func (s *Server) handleInit(in, out unsafe.Pointer) {
-	req, resp := (*fuse_init_in)(in), (*fuse_init_out)(out)
-
-	*resp = fuse_init_out{
-		header:        resp.header,
-		major:         req.major,
-		minor:         req.minor,
-		max_readahead: req.max_readahead,
+	if c.sess.opts.ReadTimeout > 0 {
+		// todo: each time this gets reset, consider
+		// bumping number of workers based on some heuristic
+		deadline := time.Now().Add(c.sess.opts.ReadTimeout)
+		if err := c.dev.SetReadDeadline(deadline); err != nil {
+			return err
+		}
 	}
+
+	buf := pool.Get().([]byte)[:]
+	n, err := c.dev.Read(buf[:cap(buf)])
+	if err != nil {
+		return fmt.Errorf("failed read from fuse device: %w", err)
+	}
+
+	req := &request{
+		header: (*proto.InHeader)(unsafe.Pointer(&buf[0])),
+		conn:   c,
+		buf:    buf,
+	}
+
+	if n < int(headerInSize) || n < int(req.header.Len) {
+		return fmt.Errorf("unexpected request size: %d", n)
+	}
+
+	return handle(req)
 }
 
 func closeErr(closer io.Closer, err *error) {
 	if err == nil {
 		panic("nil error")
 	}
-	if cerr := closer.Close(); *err == nil {
-		*err = cerr
+	if e := closer.Close(); *err == nil {
+		*err = e
 	}
 }
 
