@@ -199,6 +199,7 @@ func (c *conn) acquireCtx() (ctx *Context) {
 	} else {
 		ctx = v.(*Context)
 	}
+	ctx.closed = false
 	ctx.replySize = 0
 	ctx.conn = c
 	return ctx

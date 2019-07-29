@@ -18,8 +18,7 @@ func TestBasic(t *testing.T) {
 	handler := func(req Requester, resp Responder) {
 		switch req.(type) {
 		case *InitRequest:
-		case *LookupRequest:
-			panic("stop")
+			// don't send ENOSYS for init :).
 		default:
 			fmt.Println("UNHANDLED: ", req.String())
 			if err := resp.Reply(unix.ENOSYS); err != nil {
