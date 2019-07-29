@@ -19,6 +19,7 @@ type Handler interface {
 	Init(*InitRequest, *InitResponse)
 	Destroy(*DestroyRequest, *DestroyResponse)
 	Access(*AccessRequest, *AccessResponse)
+	Lookup(*LookupRequest, *LookupResponse)
 
 	/*
 		Lookup(r Request, name string) (EntryOut, error)
@@ -53,6 +54,7 @@ type HandlerFunc func(Requester, Responder)
 
 func (f HandlerFunc) Init(req *InitRequest, resp *InitResponse)          { f(req, resp) }
 func (f HandlerFunc) Access(req *AccessRequest, resp *AccessResponse)    { f(req, resp) }
+func (f HandlerFunc) Lookup(req *LookupRequest, resp *LookupResponse)    { f(req, resp) }
 func (f HandlerFunc) Destroy(req *DestroyRequest, resp *DestroyResponse) { f(req, resp) }
 
 var DefaultFilesystem = HandlerFunc(func(_ Requester, resp Responder) {

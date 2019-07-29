@@ -17,7 +17,9 @@ func LoggingMiddleware(h HandlerFunc) HandlerFunc {
 func TestBasic(t *testing.T) {
 	handler := func(req Requester, resp Responder) {
 		switch req.(type) {
-		case *InitRequest, *AccessRequest:
+		case *InitRequest:
+		case *LookupRequest:
+			panic("stop")
 		default:
 			fmt.Println("UNHANDLED: ", req.String())
 			if err := resp.Reply(unix.ENOSYS); err != nil {

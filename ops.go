@@ -23,7 +23,7 @@ const (
 type operation func(*Context)
 
 var ops = [...]operation{
-	// proto.LOOKUP:          handleLookup,
+	proto.LOOKUP: handleLookup,
 	// proto.FORGET:          handleForget,
 	// proto.GETATTR:         handleGetattr,
 	// proto.SETATTR:         handleSetattr,
@@ -128,6 +128,10 @@ func (ctx *Context) data() unsafe.Pointer {
 	return unsafe.Pointer(&ctx.buf[headerInSize])
 }
 
+func (ctx *Context) bytes() []byte {
+	return ctx.buf[headerInSize:ctx.Header.len]
+}
+
 func (ctx *Context) outHeader() *proto.OutHeader {
 	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.Header.len]))
 }
@@ -170,6 +174,38 @@ func (resp *response) String() string {
 
 func (resp *response) Reply(err unix.Errno) error {
 	return resp.reply(err)
+}
+
+type LookupRequest struct {
+	*Request
+	Name string
+}
+
+type LookupResponse struct {
+	*response
+	*proto.EntryOut
+}
+
+func handleLookup(ctx *Context) {
+	in, out := ctx.bytes(), (*proto.EntryOut)(ctx.outData())
+	if len(in) == 0 || in[len(in)-1] != 0 {
+		// todo: error handling at this context
+		panic("bad string")
+	}
+
+	// zero out the entry data
+	*out = proto.EntryOut{}
+
+	ctx.conn.sess.handler.Lookup(
+		&LookupRequest{
+			Request: ctx.request(),
+			Name:    string(in[:len(in)-1]),
+		},
+		&LookupResponse{
+			response: ctx.response(),
+			EntryOut: (*proto.EntryOut)(ctx.outData()),
+		},
+	)
 }
 
 type InitRequest struct {
