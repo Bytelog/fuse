@@ -2,7 +2,9 @@ package fuse
 
 import (
 	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,22 +17,45 @@ func LoggingMiddleware(h HandlerFunc) HandlerFunc {
 }
 
 func TestBasic(t *testing.T) {
+	ready := make(chan struct{})
+
 	handler := func(req Requester, resp Responder) {
-		switch req.(type) {
+		switch v := req.(type) {
 		case *InitRequest:
-			// don't send ENOSYS for init :).
+			close(ready)
+		case *LookupRequest:
+			fmt.Println("request name: ", v.Name)
+			assert(t, resp.Reply(unix.ENOENT))
 		default:
-			fmt.Println("UNHANDLED: ", req.String())
-			if err := resp.Reply(unix.ENOSYS); err != nil {
-				panic(err)
-			}
+			assert(t, resp.Reply(unix.ENOSYS))
 		}
 	}
 
 	// attach logger
 	handler = LoggingMiddleware(handler)
 
-	if err := Serve(HandlerFunc(handler), "/tmp/mnt"); err != nil {
-		t.Fatalf("%v", err)
+	go func() {
+		if err := Serve(HandlerFunc(handler), "/tmp/mnt"); err != nil {
+			panic(err)
+		}
+	}()
+
+	<-ready
+	f, err := os.Open("/tmp/mnt/")
+	assert(t, err)
+
+	names, err := f.Readdirnames(0)
+	assert(t, err)
+
+	fmt.Println(names)
+
+	// wait with a timeout, in case fuse is misbehaving. Normally we should
+	// panic with i/o timeout before exiting.
+	time.Sleep(5 * time.Second)
+}
+
+func assert(t *testing.T, err error) {
+	if err != nil {
+		t.Errorf("%v", err)
 	}
 }
