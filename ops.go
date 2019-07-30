@@ -46,9 +46,9 @@ var ops = [...]operation{
 	// proto.LISTXATTR:       handleListxattr,
 	// proto.REMOVEXATTR:     handleRemovexattr,
 	// proto.FLUSH:           handleFlush,
-	proto.INIT: handleInit,
+	proto.INIT:    handleInit,
 	proto.OPENDIR: handleOpendir,
-	// proto.READDIR:         handleReaddir,
+	proto.READDIR: handleReaddir,
 	// proto.RELEASEDIR:      handleReleasedir,
 	// proto.FSYNCDIR:        handleFsyncdir,
 	// proto.GETLK:           handleGetlk,
@@ -296,11 +296,48 @@ func handleOpendir(ctx *Context) {
 	ctx.conn.sess.handler.Opendir(
 		&OpendirRequest{
 			Request: ctx.request(),
-			Flags: in.Flags,
+			Flags:   in.Flags,
 		},
 		&OpendirResponse{
 			response: ctx.response(),
-			OpenOut: out,
+			OpenOut:  out,
+		},
+	)
+}
+
+type ReaddirRequest struct {
+	*Request
+	Fh        uint64
+	Offset    uint64
+	Size      uint32
+	ReadFlags uint32
+	LockOwner uint64
+	Flags     uint32
+}
+
+type ReaddirResponse struct {
+	*response
+}
+
+// Intended Behavior from fuse(4): "The requested action is to read up to
+//   size bytes of the file or directory, starting at offset. The bytes
+//   should be returned directly following the usual reply header."
+func handleReaddir(ctx *Context) {
+	in := (*proto.ReadIn)(ctx.data())
+
+	// todo: this doesn't actually output anything yet. add output handling.
+	ctx.conn.sess.handler.Readdir(
+		&ReaddirRequest{
+			Request:   ctx.request(),
+			Fh:        in.Fh,
+			Offset:    in.Offset,
+			Size:      in.Size,
+			ReadFlags: in.ReadFlags,
+			LockOwner: in.LockOwner,
+			Flags:     in.Flags,
+		},
+		&ReaddirResponse{
+			response: ctx.response(),
 		},
 	)
 }
