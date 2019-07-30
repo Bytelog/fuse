@@ -20,6 +20,7 @@ type Handler interface {
 	Destroy(*DestroyRequest, *DestroyResponse)
 	Access(*AccessRequest, *AccessResponse)
 	Lookup(*LookupRequest, *LookupResponse)
+	Opendir(*OpendirRequest, *OpendirResponse)
 
 	/*
 		Lookup(r Request, name string) (EntryOut, error)
@@ -56,9 +57,13 @@ func (f HandlerFunc) Init(req *InitRequest, resp *InitResponse)          { f(req
 func (f HandlerFunc) Access(req *AccessRequest, resp *AccessResponse)    { f(req, resp) }
 func (f HandlerFunc) Lookup(req *LookupRequest, resp *LookupResponse)    { f(req, resp) }
 func (f HandlerFunc) Destroy(req *DestroyRequest, resp *DestroyResponse) { f(req, resp) }
+func (f HandlerFunc) Opendir(req *OpendirRequest, resp *OpendirResponse) { f(req, resp) }
 
 var DefaultFilesystem = HandlerFunc(func(_ Requester, resp Responder) {
 	if err := resp.Reply(unix.ENOSYS); err != nil {
 		panic(err)
 	}
 })
+
+
+

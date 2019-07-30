@@ -47,7 +47,7 @@ var ops = [...]operation{
 	// proto.REMOVEXATTR:     handleRemovexattr,
 	// proto.FLUSH:           handleFlush,
 	proto.INIT: handleInit,
-	// proto.OPENDIR:         handleOpendir,
+	proto.OPENDIR: handleOpendir,
 	// proto.READDIR:         handleReaddir,
 	// proto.RELEASEDIR:      handleReleasedir,
 	// proto.FSYNCDIR:        handleFsyncdir,
@@ -203,7 +203,7 @@ func handleLookup(ctx *Context) {
 		},
 		&LookupResponse{
 			response: ctx.response(),
-			EntryOut: (*proto.EntryOut)(ctx.outData()),
+			EntryOut: out,
 		},
 	)
 }
@@ -273,6 +273,34 @@ func handleInit(ctx *Context) {
 		},
 		&InitResponse{
 			response: ctx.response(),
+		},
+	)
+}
+
+type OpendirRequest struct {
+	*Request
+	Flags uint32
+}
+
+type OpendirResponse struct {
+	*response
+	*proto.OpenOut
+}
+
+func handleOpendir(ctx *Context) {
+	in, out := (*proto.OpenIn)(ctx.data()), (*proto.OpenOut)(ctx.outData())
+
+	// zero out the open response data
+	*out = proto.OpenOut{}
+
+	ctx.conn.sess.handler.Opendir(
+		&OpendirRequest{
+			Request: ctx.request(),
+			Flags: in.Flags,
+		},
+		&OpendirResponse{
+			response: ctx.response(),
+			OpenOut: out,
 		},
 	)
 }
