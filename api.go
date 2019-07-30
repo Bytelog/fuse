@@ -61,8 +61,15 @@ func (f HandlerFunc) Destroy(req *DestroyRequest, resp *DestroyResponse) { f(req
 func (f HandlerFunc) Opendir(req *OpendirRequest, resp *OpendirResponse) { f(req, resp) }
 func (f HandlerFunc) Readdir(req *ReaddirRequest, resp *ReaddirResponse) { f(req, resp) }
 
-var DefaultFilesystem = HandlerFunc(func(_ Requester, resp Responder) {
-	if err := resp.Reply(unix.ENOSYS); err != nil {
+var DefaultFilesystem = HandlerFunc(func(req Requester, resp Responder) {
+	var err error
+	switch req.(type) {
+	case *InitRequest:
+		err = resp.Reply(0)
+	default:
+		err = resp.Reply(unix.ENOSYS)
+	}
+	if err != nil {
 		panic(err)
 	}
 })
