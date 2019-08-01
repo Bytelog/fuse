@@ -1,27 +1,20 @@
 package fuse
 
-import (
-	"golang.org/x/sys/unix"
-)
-
-type Requester interface {
-	Headers() *Header
-	Interrupt() <-chan struct{}
-	String() string
+type Request interface {
+	Raw() RawRequest
 }
 
-type Responder interface {
-	Reply(unix.Errno) error
-	String() string
+type Response interface {
+	Raw() RawResponse
 }
 
 type Handler interface {
-	Init(*InitRequest, *InitResponse)
-	Destroy(*DestroyRequest, *DestroyResponse)
-	Access(*AccessRequest, *AccessResponse)
-	Lookup(*LookupRequest, *LookupResponse)
-	Opendir(*OpendirRequest, *OpendirResponse)
-	Readdir(*ReaddirRequest, *ReaddirResponse)
+	Init(*Context, *InitIn, *InitOut) error
+	/*Destroy(*Context, *DestroyIn, *DestroyOut) Status
+	Access(*Context, *AccessIn, *AccessOut) Status
+	Lookup(*Context, *LookupIn, *LookupOut) Status
+	Opendir(*Context, *OpendirIn, *OpendirOut) Status
+	Readdir(*Context, *ReaddirIn, *ReaddirOut) Status*/
 
 	/*
 		Lookup(r Request, name string) (EntryOut, error)
@@ -52,27 +45,17 @@ type Handler interface {
 
 var _ Handler = HandlerFunc(nil)
 
-type HandlerFunc func(Requester, Responder)
+type HandlerFunc func(*Context, Request, Response) error
 
-func (f HandlerFunc) Init(req *InitRequest, resp *InitResponse)          { f(req, resp) }
-func (f HandlerFunc) Access(req *AccessRequest, resp *AccessResponse)    { f(req, resp) }
-func (f HandlerFunc) Lookup(req *LookupRequest, resp *LookupResponse)    { f(req, resp) }
-func (f HandlerFunc) Destroy(req *DestroyRequest, resp *DestroyResponse) { f(req, resp) }
-func (f HandlerFunc) Opendir(req *OpendirRequest, resp *OpendirResponse) { f(req, resp) }
-func (f HandlerFunc) Readdir(req *ReaddirRequest, resp *ReaddirResponse) { f(req, resp) }
+func (f HandlerFunc) Init(ctx *Context, req *InitIn, resp *InitOut) error {
+	return f(ctx, req, resp)
+}
 
-var DefaultFilesystem = HandlerFunc(func(req Requester, resp Responder) {
-	var err error
+var DefaultFilesystem = HandlerFunc(func(ctx *Context, req Request, resp Response) error {
 	switch req.(type) {
 	case *InitRequest:
-		err = resp.Reply(0)
+		return nil
 	default:
-		err = resp.Reply(unix.ENOSYS)
-	}
-	if err != nil {
-		panic(err)
+		return ENOSYS
 	}
 })
-
-
-

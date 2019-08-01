@@ -1,13 +1,17 @@
 package fuse
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
+
+	"bytelog.org/fuse/proto"
 )
 
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
@@ -60,6 +64,7 @@ func (s *Server) Serve(target string) error {
 	}
 
 	// attempt to clean up existing mounts
+	// todo: abort via fusectl?
 	_ = umount(target)
 
 	// register the mount
@@ -116,7 +121,7 @@ type session struct {
 }
 
 func (s *session) loop(dev *os.File) error {
-	// todo: dynamic thread scaling
+	// todo: dynamic thread scaling. fusectl for pending requests?
 
 	const threads = 4
 	// todo: open multiple connections to /dev/fuse to allow for multi-threading
@@ -167,26 +172,56 @@ func (c *conn) accept() (err error) {
 		return fmt.Errorf("failed read from fuse device: %w", err)
 	}
 
-	if n < int(headerInSize) || n < int(ctx.Header.len) {
+	if n < int(headerInSize) || n < int(ctx.req.Header.Len) {
 		return fmt.Errorf("unexpected Context size: %d", n)
 	}
 
-	code := ctx.Header.code
-	if int(code) < len(ops) && ops[code] != nil {
-		go func() {
-			ops[code](ctx)
-			// the user implementation is not required to call Reply.
-			if !ctx.closed {
-				if err := ctx.reply(0); err != nil {
-					// todo: log err
-					panic(err)
-				}
-			}
-			c.releaseCtx(ctx)
-		}()
-		return nil
+	go func() {
+		if err := c.handle(ctx); err != nil {
+			// todo: log error
+			panic(err)
+		}
+		c.releaseCtx(ctx)
+	}()
+
+	return nil
+}
+
+func (c *conn) handle(ctx *Context) error {
+	code := ctx.req.Header.OpCode
+	if len(ops) < int(code) || ops[code] == nil {
+		return fmt.Errorf("%w: %s", ErrUnsupportedOp, code)
 	}
-	return fmt.Errorf("%w: %s", ErrUnsupportedOp, code)
+
+	size, err := ops[code](ctx)
+
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno != 0 {
+		size, err = 0, nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("handler error in OP_%s: %w", code, err)
+	}
+
+	*ctx.resp.Header = proto.OutHeader{
+		Unique: ctx.req.Header.Unique,
+		Error:  -int32(errno),
+		Len:    headerOutSize + size,
+	}
+
+	if c.sess.opts.WriteTimeout > 0 {
+		deadline := time.Now().Add(c.sess.opts.WriteTimeout)
+		if err := ctx.conn.dev.SetWriteDeadline(deadline); err != nil {
+			panic(err)
+		}
+	}
+
+	p := ctx.buf[ctx.req.Header.Len : ctx.req.Header.Len+ctx.resp.Header.Len]
+	if _, err = c.dev.Write(p); err != nil {
+		return fmt.Errorf("failed to write response for OP_%s: %w", code, err)
+	}
+	return nil
 }
 
 func (c *conn) acquireCtx() (ctx *Context) {
@@ -195,10 +230,15 @@ func (c *conn) acquireCtx() (ctx *Context) {
 		ctx = &Context{
 			buf: make([]byte, 64*1024),
 		}
-		ctx.Header = (*Header)(unsafe.Pointer(&ctx.buf[0]))
+		ctx.req.Header = (*proto.InHeader)(unsafe.Pointer(&ctx.buf[0]))
+		ctx.req.Data = &ctx.buf[headerInSize]
 	} else {
 		ctx = v.(*Context)
 	}
+
+	offset := ctx.req.Header.Len
+	ctx.resp.Header = (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[offset]))
+	ctx.resp.Data = unsafe.Pointer(&ctx.buf[offset+headerOutSize])
 	ctx.closed = false
 	ctx.replySize = 0
 	ctx.conn = c

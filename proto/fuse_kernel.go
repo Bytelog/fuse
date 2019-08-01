@@ -143,7 +143,10 @@
 
 package proto
 
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
 
 // Version negotiation:
 //
@@ -404,7 +407,7 @@ func (code OpCode) String() string {
 	if code == CUSE_INIT {
 		return "CUSE_INIT"
 	}
-	return "UNKNOWN"
+	return fmt.Sprintf("UNKNOWN(%d)", code)
 }
 
 // FUSE operation codes
@@ -515,7 +518,7 @@ func (code NotifyCode) String() string {
 	if int(code) < len(notifyCodeText) && notifyCodeText[code] != "" {
 		return notifyCodeText[code]
 	}
-	return "UNKNOWN"
+	return fmt.Sprintf("UNKNOWN(%d)", code)
 }
 
 const (

@@ -2,10 +2,7 @@ package fuse
 
 import (
 	"errors"
-	"time"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 
 	"bytelog.org/fuse/proto"
 )
@@ -20,7 +17,7 @@ const (
 	headerOutSize = uint32(unsafe.Sizeof(proto.OutHeader{}))
 )
 
-type operation func(*Context)
+type operation func(*Context) (size uint32, err error)
 
 var ops = [...]operation{
 	proto.LOOKUP: handleLookup,
@@ -70,122 +67,17 @@ var ops = [...]operation{
 	// proto.COPY_FILE_RANGE: handleCopyFileRange,
 }
 
-var _ = [1]byte{unsafe.Sizeof(Header{}) - unsafe.Sizeof(proto.InHeader{}): 0}
-
-type Header struct {
-	len  uint32
-	code proto.OpCode
-	ID   uint64
-	Node uint64
-	UID  uint32
-	GID  uint32
-	PID  uint32
-	_    uint32
+type RawRequest struct {
+	Header *proto.InHeader
+	Data   unsafe.Pointer
 }
 
-type Context struct {
-	*Header
-
-	conn      *conn
-	buf       []byte
-	replySize uint32
-	closed    bool
+type RawResponse struct {
+	Header *proto.OutHeader
+	Data   unsafe.Pointer
 }
 
-func (ctx *Context) reply(err unix.Errno) error {
-	if ctx.closed {
-		return ErrClosedWrite
-	}
-
-	header := ctx.outHeader()
-	*header = proto.OutHeader{
-		Len:    headerOutSize,
-		Unique: ctx.Header.ID,
-	}
-
-	if err == 0 {
-		header.Len += ctx.replySize
-	} else {
-		header.Error = -int32(err)
-	}
-
-	if ctx.conn.sess.opts.WriteTimeout > 0 {
-		deadline := time.Now().Add(ctx.conn.sess.opts.WriteTimeout)
-		if err := ctx.conn.dev.SetWriteDeadline(deadline); err != nil {
-			panic(err)
-		}
-	}
-
-	p := ctx.buf[ctx.Header.len : ctx.Header.len+header.Len]
-	if _, err := ctx.conn.dev.Write(p); err != nil {
-		return err
-	}
-	ctx.closed = true
-	return nil
-}
-
-func (ctx *Context) data() unsafe.Pointer {
-	return unsafe.Pointer(&ctx.buf[headerInSize])
-}
-
-func (ctx *Context) bytes() []byte {
-	return ctx.buf[headerInSize:ctx.Header.len]
-}
-
-func (ctx *Context) outHeader() *proto.OutHeader {
-	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.Header.len]))
-}
-
-func (ctx *Context) outData() unsafe.Pointer {
-	return unsafe.Pointer(&ctx.buf[ctx.Header.len+headerOutSize])
-}
-
-func (ctx *Context) request() *Request {
-	return (*Request)(unsafe.Pointer(ctx))
-}
-
-func (ctx *Context) response() *response {
-	return (*response)(unsafe.Pointer(ctx))
-}
-
-type Request struct {
-	Context
-}
-
-func (req *Request) Headers() *Header {
-	return (*Header)(unsafe.Pointer(req.Header))
-}
-
-func (req *Request) String() string {
-	return "REQUEST_" + req.Header.code.String()
-}
-
-func (req *Request) Interrupt() <-chan struct{} {
-	return nil
-}
-
-type response struct {
-	Context
-}
-
-func (resp *response) String() string {
-	return "RESPONSE_" + resp.Header.code.String()
-}
-
-func (resp *response) Reply(err unix.Errno) error {
-	return resp.reply(err)
-}
-
-type LookupRequest struct {
-	*Request
-	Name string
-}
-
-type LookupResponse struct {
-	*response
-	*proto.EntryOut
-}
-
+/*
 func handleLookup(ctx *Context) {
 	in, out := ctx.bytes(), (*proto.EntryOut)(ctx.outData())
 	if len(in) == 0 || in[len(in)-1] != 0 {
@@ -206,22 +98,10 @@ func handleLookup(ctx *Context) {
 			EntryOut: out,
 		},
 	)
-}
+}*/
 
-type InitRequest struct {
-	*Request
-	Major        uint32
-	Minor        uint32
-	MaxReadahead uint32
-	Flags        uint32
-}
-
-type InitResponse struct {
-	*response
-}
-
-func handleInit(ctx *Context) {
-	in, out := (*proto.InitIn)(ctx.data()), (*proto.InitOut)(ctx.outData())
+func handleInit(ctx *Context) (size uint32, err error) {
+	in, out := (*proto.InitIn)(ctx.req.Data), (*proto.InitOut)(ctx.resp.Data)
 
 	*out = proto.InitOut{
 		Major: proto.KERNEL_VERSION,
@@ -262,41 +142,20 @@ func handleInit(ctx *Context) {
 	out.MaxReadahead = 65536
 	out.MaxWrite = 65536
 
-	ctx.replySize = uint32(unsafe.Sizeof(proto.InitOut{}))
-	ctx.conn.sess.handler.Init(
-		&InitRequest{
-			Request:      ctx.request(),
-			Major:        in.Major,
-			Minor:        in.Minor,
-			MaxReadahead: in.MaxReadahead,
-			Flags:        in.Flags,
-		},
-		&InitResponse{
-			response: ctx.response(),
-		},
-	)
+	err = ctx.conn.sess.handler.Init(ctx, (*InitIn)(ctx.in()), (*InitOut)(ctx.out()))
+	return uint32(unsafe.Sizeof(proto.InitOut{})), err
 }
 
-type OpendirRequest struct {
-	*Request
-	Flags uint32
-}
-
-type OpendirResponse struct {
-	*response
-	*proto.OpenOut
-}
-
+/*
 func handleOpendir(ctx *Context) {
-	in, out := (*proto.OpenIn)(ctx.data()), (*proto.OpenOut)(ctx.outData())
-
-	// zero out the open response data
+	out := (*proto.OpenOut)(ctx.outData())
 	*out = proto.OpenOut{}
 
+	ctx.replySize = uint32(unsafe.Sizeof(proto.OpenOut{}))
 	ctx.conn.sess.handler.Opendir(
 		&OpendirRequest{
 			Request: ctx.request(),
-			Flags:   in.Flags,
+			OpenIn:  (*proto.OpenIn)(ctx.data()),
 		},
 		&OpendirResponse{
 			response: ctx.response(),
@@ -304,52 +163,28 @@ func handleOpendir(ctx *Context) {
 		},
 	)
 }
+*/
 
-type ReaddirRequest struct {
-	*Request
-	Fh        uint64
-	Offset    uint64
-	Size      uint32
-	ReadFlags uint32
-	LockOwner uint64
-	Flags     uint32
-}
-
-type ReaddirResponse struct {
-	*response
-}
-
+/*
 // Intended Behavior from fuse(4): "The requested action is to read up to
 //   size bytes of the file or directory, starting at offset. The bytes
 //   should be returned directly following the usual reply header."
 func handleReaddir(ctx *Context) {
-	in := (*proto.ReadIn)(ctx.data())
 
 	// todo: this doesn't actually output anything yet. add output handling.
 	ctx.conn.sess.handler.Readdir(
 		&ReaddirRequest{
-			Request:   ctx.request(),
-			Fh:        in.Fh,
-			Offset:    in.Offset,
-			Size:      in.Size,
-			ReadFlags: in.ReadFlags,
-			LockOwner: in.LockOwner,
-			Flags:     in.Flags,
+			Request: ctx.request(),
+			ReadIn:  (*proto.ReadIn)(ctx.data()),
 		},
 		&ReaddirResponse{
 			response: ctx.response(),
 		},
 	)
 }
+*/
 
-type AccessRequest struct {
-	*Request
-	Mask uint32
-}
-
-type AccessResponse struct {
-	*response
-}
+/*
 
 func handleAccess(ctx *Context) {
 	in := (*proto.AccessIn)(ctx.data())
@@ -361,14 +196,9 @@ func handleAccess(ctx *Context) {
 		&AccessResponse{response: ctx.response()},
 	)
 }
+*/
 
-type DestroyRequest struct {
-	*Request
-}
-
-type DestroyResponse struct {
-	*response
-}
+/*
 
 func handleDestroy(ctx *Context) {
 	ctx.conn.sess.handler.Destroy(
@@ -376,3 +206,4 @@ func handleDestroy(ctx *Context) {
 		&DestroyResponse{response: ctx.response()},
 	)
 }
+*/
