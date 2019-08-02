@@ -13,16 +13,14 @@ type Context struct {
 
 	sess *session
 	buf  []byte
-
-	// the size of the data segment in the operation's reply.
-	replySize uint32
-
-	// indicates that the request needs no response.
-	closed bool
 }
 
 func (ctx *Context) Interrupt() <-chan struct{} {
 	return nil
+}
+
+func (ctx *Context) String() string {
+	return "OP_" + ctx.req.Header.OpCode.String()
 }
 
 func (ctx *Context) in() unsafe.Pointer {
@@ -34,7 +32,6 @@ func (ctx *Context) out() unsafe.Pointer {
 }
 
 var (
-	OK     = error(nil)
 	ENOENT = syscall.ENOENT
 	ENOSYS = syscall.ENOSYS
 	EPROTO = syscall.EPROTO
@@ -66,7 +63,7 @@ func (header *Header) Raw() RawRequest {
 }
 
 type outHeader struct {
-	proto.InHeader
+	proto.OutHeader
 }
 
 func (header *outHeader) Raw() RawResponse {

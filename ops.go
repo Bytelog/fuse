@@ -23,7 +23,7 @@ const (
 type operation func(*Context) (size uint32, err error)
 
 var ops = [...]operation{
-	proto.LOOKUP: handleLookup,
+	// proto.LOOKUP: handleLookup,
 	// proto.FORGET:          handleForget,
 	// proto.GETATTR:         handleGetattr,
 	// proto.SETATTR:         handleSetattr,
@@ -46,15 +46,15 @@ var ops = [...]operation{
 	// proto.LISTXATTR:       handleListxattr,
 	// proto.REMOVEXATTR:     handleRemovexattr,
 	// proto.FLUSH:           handleFlush,
-	proto.INIT:    handleInit,
-	proto.OPENDIR: handleOpendir,
-	proto.READDIR: handleReaddir,
+	proto.INIT: handleInit,
+	// proto.OPENDIR: handleOpendir,
+	// proto.READDIR: handleReaddir,
 	// proto.RELEASEDIR:      handleReleasedir,
 	// proto.FSYNCDIR:        handleFsyncdir,
 	// proto.GETLK:           handleGetlk,
 	// proto.SETLK:           handleSetlk,
 	// proto.SETLKW:          handleSetlk,
-	proto.ACCESS: handleAccess,
+	// proto.ACCESS: handleAccess,
 	// proto.CREATE:          handleCreate,
 	// proto.INTERRUPT:       handleInterrupt,
 	// proto.BMAP:            handleBmap,

@@ -53,7 +53,7 @@ func (f HandlerFunc) Init(ctx *Context, req *InitIn, resp *InitOut) error {
 
 var DefaultFilesystem = HandlerFunc(func(ctx *Context, req Request, resp Response) error {
 	switch req.(type) {
-	case *InitRequest:
+	case *InitIn:
 		return nil
 	default:
 		return ENOSYS

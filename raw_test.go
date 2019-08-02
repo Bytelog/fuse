@@ -5,29 +5,27 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 func LoggingMiddleware(h HandlerFunc) HandlerFunc {
-	return func(req Requester, resp Responder) {
-		fmt.Printf("%s: %+v\n", req, req.Headers())
-		h(req, resp)
+	return func(ctx *Context, req Request, resp Response) error {
+		fmt.Printf("%s: %+v\n", ctx, req.Raw().Header)
+		return h(ctx, req, resp)
 	}
 }
 
 func TestBasic(t *testing.T) {
 	ready := make(chan struct{})
 
-	handler := func(req Requester, resp Responder) {
-		switch v := req.(type) {
-		case *InitRequest:
+	handler := func(ctx *Context, req Request, resp Response) error {
+		switch req.(type) {
+		case *InitIn:
 			close(ready)
-		case *LookupRequest:
-			fmt.Println("request name: ", v.Name)
-			assert(t, resp.Reply(unix.ENOENT))
+			return nil
+		// case *LookupIn:
+		//	return ENOENT
 		default:
-			assert(t, resp.Reply(unix.ENOSYS))
+			return ENOSYS
 		}
 	}
 

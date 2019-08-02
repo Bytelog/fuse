@@ -183,9 +183,16 @@ func (c *conn) accept() (err error) {
 		return fmt.Errorf("unexpected Context size: %d", n)
 	}
 
+	start := ctx.req.Header.Len
+	ctx.resp = RawResponse{
+		Header: (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[start])),
+		Data:   unsafe.Pointer(&ctx.buf[start+headerOutSize]),
+	}
+
 	go func() {
 		if err := c.handle(ctx); err != nil {
 			// todo: log error
+			fmt.Println(err)
 			panic(err)
 		}
 		c.releaseCtx(ctx)
@@ -206,7 +213,6 @@ func (c *conn) handle(ctx *Context) error {
 	if errors.As(err, &errno) && errno != 0 {
 		size, err = 0, nil
 	}
-
 	if err != nil {
 		return fmt.Errorf("handler error in OP_%s: %w", code, err)
 	}
@@ -238,16 +244,11 @@ func (c *conn) acquireCtx() (ctx *Context) {
 			buf: make([]byte, 64*1024),
 		}
 		ctx.req.Header = (*proto.InHeader)(unsafe.Pointer(&ctx.buf[0]))
-		ctx.req.Data = &ctx.buf[headerInSize]
+		ctx.req.Data = unsafe.Pointer(&ctx.buf[headerInSize])
 	} else {
 		ctx = v.(*Context)
 	}
-
-	offset := ctx.req.Header.Len
-	ctx.resp.Header = (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[offset]))
-	ctx.resp.Data = unsafe.Pointer(&ctx.buf[offset+headerOutSize])
-	ctx.closed = false
-	ctx.replySize = 0
+	ctx.resp = RawResponse{}
 	ctx.sess = c.sess
 	return ctx
 }
