@@ -11,7 +11,7 @@ type Context struct {
 	req  RawRequest
 	resp RawResponse
 
-	conn *conn
+	sess *session
 	buf  []byte
 
 	// the size of the data segment in the operation's reply.
@@ -35,8 +35,9 @@ func (ctx *Context) out() unsafe.Pointer {
 
 var (
 	OK     = error(nil)
-	ENOSYS = syscall.ENOSYS
 	ENOENT = syscall.ENOENT
+	ENOSYS = syscall.ENOSYS
+	EPROTO = syscall.EPROTO
 )
 
 var _ = [1]byte{unsafe.Sizeof(Header{}) - unsafe.Sizeof(proto.InHeader{}): 0}
@@ -94,13 +95,13 @@ type InitOut struct {
 	outHeader
 	major               uint32
 	minor               uint32
-	maxReadahead        uint32
-	flags               uint32
-	maxBackground       uint16
-	congestionThreshold uint16
-	maxWrite            uint32
-	timeGran            uint32
-	maxPages            uint16
+	MaxReadahead        uint32
+	Flags               uint32
+	MaxBackground       uint16
+	CongestionThreshold uint16
+	MaxWrite            uint32
+	TimeGran            uint32
+	MaxPages            uint16
 	_                   uint16
 	_                   [8]uint32
 }

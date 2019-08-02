@@ -103,6 +103,14 @@ type opts struct {
 
 	// how long a Context has to respond
 	WriteTimeout time.Duration
+
+	major        uint32
+	minor        uint32
+	maxReadahead uint32
+	flags        uint32
+	maxWrite     uint32
+	timeGran     uint32
+	maxPages     uint16
 }
 
 var defaultOpts = opts{
@@ -115,7 +123,6 @@ type session struct {
 	handler Handler
 	opts    opts
 	errc    chan error
-	flags   uint32
 
 	sem semaphore
 }
@@ -212,7 +219,7 @@ func (c *conn) handle(ctx *Context) error {
 
 	if c.sess.opts.WriteTimeout > 0 {
 		deadline := time.Now().Add(c.sess.opts.WriteTimeout)
-		if err := ctx.conn.dev.SetWriteDeadline(deadline); err != nil {
+		if err := c.dev.SetWriteDeadline(deadline); err != nil {
 			panic(err)
 		}
 	}
@@ -241,7 +248,7 @@ func (c *conn) acquireCtx() (ctx *Context) {
 	ctx.resp.Data = unsafe.Pointer(&ctx.buf[offset+headerOutSize])
 	ctx.closed = false
 	ctx.replySize = 0
-	ctx.conn = c
+	ctx.sess = c.sess
 	return ctx
 }
 

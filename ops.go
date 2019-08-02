@@ -2,6 +2,8 @@ package fuse
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"unsafe"
 
 	"bytelog.org/fuse/proto"
@@ -10,6 +12,7 @@ import (
 var (
 	ErrClosedWrite   = errors.New("fuse: invalid write on closed Context")
 	ErrUnsupportedOp = errors.New("fuse: unsupported op")
+	ErrParam         = errors.New("fuse: bad parameter")
 )
 
 const (
@@ -88,7 +91,7 @@ func handleLookup(ctx *Context) {
 	// zero out the entry data
 	*out = proto.EntryOut{}
 
-	ctx.conn.sess.handler.Lookup(
+	ctx.sess.handler.Lookup(
 		&LookupRequest{
 			Request: ctx.request(),
 			Name:    string(in[:len(in)-1]),
@@ -101,49 +104,112 @@ func handleLookup(ctx *Context) {
 }*/
 
 func handleInit(ctx *Context) (size uint32, err error) {
-	in, out := (*proto.InitIn)(ctx.req.Data), (*proto.InitOut)(ctx.resp.Data)
+	// todo: determine support at runtime for cansplice, vmsplice
+	cansplice := true
+	vmsplice := true
 
-	*out = proto.InitOut{
-		Major: proto.KERNEL_VERSION,
-		Minor: proto.KERNEL_MINOR_VERSION,
-	}
+	in, out := (*proto.InitIn)(ctx.req.Data), (*proto.InitOut)(ctx.resp.Data)
+	size = uint32(unsafe.Sizeof(out))
 
 	if in.Major < 7 {
-		// error: unsupported proto version
-		return
+		return 0, EPROTO
 	}
 
 	if in.Major > 7 {
-		// allow kernel to downgrade proto version
-		return
+		// allow kernel to downgrade in followup INIT
+		*out = proto.InitOut{
+			Major: proto.KERNEL_VERSION,
+			Minor: proto.KERNEL_MINOR_VERSION,
+		}
+		return size, nil
 	}
 
-	if in.Minor >= 6 {
-		// todo: only allow downgrading of max_readahead once set
-		// todo: determine bufsize from max_pages?
+	// mask out any unsupported flags
+	in.Flags &= proto.ASYNC_READ | proto.POSIX_LOCKS | proto.FILE_OPS |
+		proto.ATOMIC_O_TRUNC | proto.EXPORT_SUPPORT | proto.BIG_WRITES |
+		proto.DONT_MASK | proto.SPLICE_WRITE | proto.SPLICE_MOVE |
+		proto.SPLICE_READ | proto.FLOCK_LOCKS | proto.HAS_IOCTL_DIR |
+		proto.AUTO_INVAL_DATA | proto.DO_READDIRPLUS | proto.READDIRPLUS_AUTO |
+		proto.ASYNC_DIO | proto.WRITEBACK_CACHE | proto.NO_OPEN_SUPPORT |
+		proto.PARALLEL_DIROPS | proto.HANDLE_KILLPRIV | proto.POSIX_ACL |
+		proto.ABORT_ERROR | proto.MAX_PAGES | proto.CACHE_SYMLINKS |
+		proto.NO_OPENDIR_SUPPORT | proto.EXPLICIT_INVAL_DATA
 
-		out.MaxReadahead = in.MaxReadahead
-		ctx.conn.sess.flags |= in.Flags
+	if !cansplice {
+		in.Flags &^= proto.SPLICE_READ
 	}
 
-	if in.Minor >= 14 {
-		// todo: determine if splice is supported, vmsplice?
-		const canSplice = true
-		const vmSplice = true
-
-		// wip
-
+	if !vmsplice {
+		in.Flags &^= proto.SPLICE_WRITE | proto.SPLICE_MOVE
 	}
 
-	out.TimeGran = 1000000000
-	out.CongestionThreshold = 10
-	out.MaxBackground = 10
-	out.MaxPages = 10
-	out.MaxReadahead = 65536
-	out.MaxWrite = 65536
+	*out = proto.InitOut{
+		Major:               proto.KERNEL_VERSION,
+		Minor:               proto.KERNEL_MINOR_VERSION,
+		MaxReadahead:        in.MaxReadahead,
+		Flags:               in.Flags,
+		MaxBackground:       16,
+		CongestionThreshold: 12,
+		MaxWrite:            32 * uint32(os.Getpagesize()),
+		TimeGran:            1,
+		MaxPages:            32,
+	}
 
-	err = ctx.conn.sess.handler.Init(ctx, (*InitIn)(ctx.in()), (*InitOut)(ctx.out()))
-	return uint32(unsafe.Sizeof(proto.InitOut{})), err
+	if out.Flags&proto.MAX_PAGES == 0 {
+		out.MaxPages = 0
+	}
+
+	if err = ctx.sess.handler.Init(ctx,
+		(*InitIn)(ctx.in()),
+		(*InitOut)(ctx.out()),
+	); err != nil {
+		return 0, err
+	}
+
+	if extra := out.Flags &^ in.Flags; extra != 0 {
+		const format = "%w: flags (%X) not supported by kernel"
+		return 0, fmt.Errorf(format, EPROTO, extra)
+	}
+
+	if in.MaxReadahead < out.MaxReadahead {
+		const format = "%w: MaxReadahead size (%d) too large"
+		return 0, fmt.Errorf(format, EPROTO, out.MaxReadahead)
+	}
+
+	if out.CongestionThreshold > out.MaxBackground {
+		const format = "%w: CongestionThreshold exceeds MaxBackground"
+		return 0, fmt.Errorf(format, EPROTO)
+	}
+
+	if out.MaxWrite < proto.BUFFER_HEADER_SIZE {
+		const format = "%w: MaxWrite (%d) must be at least %d"
+		return 0, fmt.Errorf(format, EPROTO, out.MaxWrite, proto.BUFFER_HEADER_SIZE)
+	}
+
+	if out.TimeGran < 1 || out.TimeGran > proto.MAX_TIME_GRAN {
+		const format = "%w: TimeGran (%d) must be between 1ns and 1s"
+		return 0, fmt.Errorf(format, EPROTO, out.TimeGran)
+	}
+
+	if out.MaxPages > proto.MAX_MAX_PAGES {
+		const format = "%w: MaxPages (%d) cannot exceed %d"
+		return 0, fmt.Errorf(format, EPROTO, out.MaxPages, proto.MAX_MAX_PAGES)
+	}
+
+	// user data has been accepted, apply it to our session
+	ctx.sess.opts.maxReadahead = out.MaxReadahead
+	ctx.sess.opts.flags = out.Flags
+	ctx.sess.opts.maxWrite = out.MaxWrite
+	ctx.sess.opts.timeGran = out.TimeGran
+	ctx.sess.opts.maxPages = out.MaxPages
+
+	if in.Minor < 5 {
+		return proto.COMPAT_INIT_OUT_SIZE, nil
+	}
+	if in.Minor < 23 {
+		return proto.COMPAT_22_INIT_OUT_SIZE, nil
+	}
+	return size, nil
 }
 
 /*
@@ -152,7 +218,7 @@ func handleOpendir(ctx *Context) {
 	*out = proto.OpenOut{}
 
 	ctx.replySize = uint32(unsafe.Sizeof(proto.OpenOut{}))
-	ctx.conn.sess.handler.Opendir(
+	ctx.sess.handler.Opendir(
 		&OpendirRequest{
 			Request: ctx.request(),
 			OpenIn:  (*proto.OpenIn)(ctx.data()),
@@ -172,7 +238,7 @@ func handleOpendir(ctx *Context) {
 func handleReaddir(ctx *Context) {
 
 	// todo: this doesn't actually output anything yet. add output handling.
-	ctx.conn.sess.handler.Readdir(
+	ctx.sess.handler.Readdir(
 		&ReaddirRequest{
 			Request: ctx.request(),
 			ReadIn:  (*proto.ReadIn)(ctx.data()),
@@ -188,7 +254,7 @@ func handleReaddir(ctx *Context) {
 
 func handleAccess(ctx *Context) {
 	in := (*proto.AccessIn)(ctx.data())
-	ctx.conn.sess.handler.Access(
+	ctx.sess.handler.Access(
 		&AccessRequest{
 			Request: ctx.request(),
 			Mask:    in.Mask,
@@ -201,7 +267,7 @@ func handleAccess(ctx *Context) {
 /*
 
 func handleDestroy(ctx *Context) {
-	ctx.conn.sess.handler.Destroy(
+	ctx.sess.handler.Destroy(
 		&DestroyRequest{Request: ctx.request()},
 		&DestroyResponse{response: ctx.response()},
 	)
