@@ -1,20 +1,20 @@
 package fuse
 
-type Request interface {
-	Raw() RawRequest
-}
+type Request interface{}
 
-type Response interface {
-	Raw() RawResponse
-}
+type Response interface{}
 
 type Handler interface {
 	Init(*Context, *InitIn, *InitOut) error
-	/*Destroy(*Context, *DestroyIn, *DestroyOut) Status
-	Access(*Context, *AccessIn, *AccessOut) Status
-	Lookup(*Context, *LookupIn, *LookupOut) Status
-	Opendir(*Context, *OpendirIn, *OpendirOut) Status
-	Readdir(*Context, *ReaddirIn, *ReaddirOut) Status*/
+	Access(*Context, *AccessIn, *AccessOut) error
+	Getattr(*Context, *GetattrIn, *GetattrOut) error
+	Destroy(*Context, *DestroyIn, *DestroyOut) error
+	Lookup(*Context, *LookupIn, *LookupOut) error
+	/*Destroy(*Context, *DestroyIn, *DestroyOut) error
+	Access(*Context, *AccessIn, *AccessOut) error
+	Lookup(*Context, *LookupIn, *LookupOut) error
+	Opendir(*Context, *OpendirIn, *OpendirOut) error
+	Readdir(*Context, *ReaddirIn, *ReaddirOut) error*/
 
 	/*
 		Lookup(r Request, name string) (EntryOut, error)
@@ -47,7 +47,23 @@ var _ Handler = HandlerFunc(nil)
 
 type HandlerFunc func(*Context, Request, Response) error
 
+func (f HandlerFunc) Lookup(ctx *Context, req *LookupIn, resp *LookupOut) error {
+	return f(ctx, req, resp)
+}
+
 func (f HandlerFunc) Init(ctx *Context, req *InitIn, resp *InitOut) error {
+	return f(ctx, req, resp)
+}
+
+func (f HandlerFunc) Access(ctx *Context, req *AccessIn, resp *AccessOut) error {
+	return f(ctx, req, resp)
+}
+
+func (f HandlerFunc) Getattr(ctx *Context, req *GetattrIn, resp *GetattrOut) error {
+	return f(ctx, req, resp)
+}
+
+func (f HandlerFunc) Destroy(ctx *Context, req *DestroyIn, resp *DestroyOut) error {
 	return f(ctx, req, resp)
 }
 

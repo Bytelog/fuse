@@ -9,7 +9,6 @@ import (
 
 func LoggingMiddleware(h HandlerFunc) HandlerFunc {
 	return func(ctx *Context, req Request, resp Response) error {
-		fmt.Printf("%s: %+v\n", ctx, req.Raw().Header)
 		return h(ctx, req, resp)
 	}
 }
@@ -25,6 +24,7 @@ func TestBasic(t *testing.T) {
 		// case *LookupIn:
 		//	return ENOENT
 		default:
+			fmt.Println("RESPONDING ENOSYS to", ctx)
 			return ENOSYS
 		}
 	}
@@ -45,7 +45,7 @@ func TestBasic(t *testing.T) {
 	names, err := f.Readdirnames(0)
 	assert(t, err)
 
-	fmt.Println(names)
+	fmt.Println("READDIR NAMES: ", names)
 
 	// wait with a timeout, in case fuse is misbehaving. Normally we should
 	// panic with i/o timeout before exiting.

@@ -10,22 +10,20 @@ import (
 )
 
 var (
-	ErrClosedWrite   = errors.New("fuse: invalid write on closed Context")
 	ErrUnsupportedOp = errors.New("fuse: unsupported op")
-	ErrParam         = errors.New("fuse: bad parameter")
 )
 
 const (
-	headerInSize  = uint32(unsafe.Sizeof(proto.InHeader{}))
-	headerOutSize = uint32(unsafe.Sizeof(proto.OutHeader{}))
+	headerInSize  = unsafe.Sizeof(proto.InHeader{})
+	headerOutSize = unsafe.Sizeof(proto.OutHeader{})
 )
 
-type operation func(*Context) (size uint32, err error)
+type operation func(*Context) (size uintptr, err error)
 
 var ops = [...]operation{
 	// proto.LOOKUP: handleLookup,
 	// proto.FORGET:          handleForget,
-	// proto.GETATTR:         handleGetattr,
+	proto.GETATTR: handleGetattr,
 	// proto.SETATTR:         handleSetattr,
 	// proto.READLINK:        handleReadlink,
 	// proto.SYMLINK:         handleSymlink,
@@ -54,11 +52,11 @@ var ops = [...]operation{
 	// proto.GETLK:           handleGetlk,
 	// proto.SETLK:           handleSetlk,
 	// proto.SETLKW:          handleSetlk,
-	// proto.ACCESS: handleAccess,
+	proto.ACCESS: handleAccess,
 	// proto.CREATE:          handleCreate,
 	// proto.INTERRUPT:       handleInterrupt,
 	// proto.BMAP:            handleBmap,
-	// proto.DESTROY: handleDestroy,
+	proto.DESTROY: handleDestroy,
 	// proto.IOCTL:           handleIoctl,
 	// proto.POLL:            handlePoll,
 	// proto.NOTIFY_REPLY:    handleNotifyReply,
@@ -72,17 +70,18 @@ var ops = [...]operation{
 
 type RawRequest struct {
 	Header *proto.InHeader
-	Data   unsafe.Pointer
+	Data   []byte
 }
 
 type RawResponse struct {
 	Header *proto.OutHeader
-	Data   unsafe.Pointer
+	Data   []byte
 }
 
 /*
-func handleLookup(ctx *Context) {
-	in, out := ctx.bytes(), (*proto.EntryOut)(ctx.outData())
+func handleLookup(ctx *Context) (size uintptr, err error) {
+	in, out := ctx.bytes(0), (*proto.EntryOut)(ctx.resp.Data)
+
 	if len(in) == 0 || in[len(in)-1] != 0 {
 		// todo: error handling at this context
 		panic("bad string")
@@ -103,13 +102,14 @@ func handleLookup(ctx *Context) {
 	)
 }*/
 
-func handleInit(ctx *Context) (size uint32, err error) {
+func handleInit(ctx *Context) (size uintptr, err error) {
 	// todo: determine support at runtime for cansplice, vmsplice
 	cansplice := true
 	vmsplice := true
 
-	in, out := (*proto.InitIn)(ctx.req.Data), (*proto.InitOut)(ctx.resp.Data)
-	size = uint32(unsafe.Sizeof(out))
+	in := (*proto.InitIn)(ctx.inData(unsafe.Sizeof(proto.InitIn{})))
+	out := (*proto.InitOut)(ctx.outData(0))
+	size = unsafe.Sizeof(out)
 
 	if in.Major < 7 {
 		return 0, EPROTO
@@ -160,8 +160,8 @@ func handleInit(ctx *Context) (size uint32, err error) {
 	}
 
 	if err = ctx.sess.handler.Init(ctx,
-		(*InitIn)(ctx.in()),
-		(*InitOut)(ctx.out()),
+		(*InitIn)(ctx.in(unsafe.Sizeof(InitIn{}))),
+		(*InitOut)(ctx.out(0)),
 	); err != nil {
 		return 0, err
 	}
@@ -197,6 +197,7 @@ func handleInit(ctx *Context) (size uint32, err error) {
 	}
 
 	// user data has been accepted, apply it to our session
+	ctx.sess.minor = in.Minor
 	ctx.sess.opts.maxReadahead = out.MaxReadahead
 	ctx.sess.opts.flags = out.Flags
 	ctx.sess.opts.maxWrite = out.MaxWrite
@@ -250,26 +251,30 @@ func handleReaddir(ctx *Context) {
 }
 */
 
-/*
-
-func handleAccess(ctx *Context) {
-	in := (*proto.AccessIn)(ctx.data())
-	ctx.sess.handler.Access(
-		&AccessRequest{
-			Request: ctx.request(),
-			Mask:    in.Mask,
-		},
-		&AccessResponse{response: ctx.response()},
+func handleAccess(ctx *Context) (size uintptr, err error) {
+	return 0, ctx.sess.handler.Access(ctx,
+		(*AccessIn)(ctx.in(unsafe.Sizeof(AccessIn{}))),
+		(*AccessOut)(ctx.out(0)),
 	)
 }
-*/
 
-/*
+func handleGetattr(ctx *Context) (size uintptr, err error) {
+	out := (*GetattrOut)(ctx.out(unsafe.Sizeof(GetattrOut{})))
+	size = unsafe.Sizeof(proto.AttrOut{})
 
-func handleDestroy(ctx *Context) {
-	ctx.sess.handler.Destroy(
-		&DestroyRequest{Request: ctx.request()},
-		&DestroyResponse{response: ctx.response()},
+	if ctx.sess.minor < 9 {
+		in := &GetattrIn{Header: *(*Header)(ctx.in(headerInSize))}
+		return size, ctx.sess.handler.Getattr(ctx, in, out)
+	}
+
+	in := (*GetattrIn)(ctx.in(unsafe.Sizeof(GetattrIn{})))
+	return size, ctx.sess.handler.Getattr(ctx, in, out)
+}
+
+func handleDestroy(ctx *Context) (size uintptr, err error) {
+	// todo: server shutdown
+	return 0, ctx.sess.handler.Destroy(ctx,
+		(*DestroyIn)(ctx.in(unsafe.Sizeof(DestroyIn{}))),
+		(*DestroyOut)(ctx.out(0)),
 	)
 }
-*/

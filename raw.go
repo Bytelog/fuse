@@ -104,8 +104,6 @@ type opts struct {
 	// how long a Context has to respond
 	WriteTimeout time.Duration
 
-	major        uint32
-	minor        uint32
 	maxReadahead uint32
 	flags        uint32
 	maxWrite     uint32
@@ -124,7 +122,8 @@ type session struct {
 	opts    opts
 	errc    chan error
 
-	sem semaphore
+	minor uint32
+	sem   semaphore
 }
 
 func (s *session) loop(dev *os.File) error {
@@ -174,20 +173,19 @@ func (c *conn) accept() (err error) {
 	}
 
 	ctx := c.acquireCtx()
-	n, err := c.dev.Read(ctx.buf[:cap(ctx.buf)])
+	n, err := c.dev.Read(ctx.req.Data)
 	if err != nil {
 		return fmt.Errorf("failed read from fuse device: %w", err)
 	}
 
 	if n < int(headerInSize) || n < int(ctx.req.Header.Len) {
-		return fmt.Errorf("unexpected Context size: %d", n)
+		return fmt.Errorf("unexpected request size: %d", n)
 	}
 
-	start := ctx.req.Header.Len
-	ctx.resp = RawResponse{
-		Header: (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[start])),
-		Data:   unsafe.Pointer(&ctx.buf[start+headerOutSize]),
-	}
+	// split req, resp buffer slices
+	ctx.req.Data = ctx.req.Data[:ctx.req.Header.Len]
+	ctx.resp.Data = ctx.req.Data[len(ctx.req.Data):cap(ctx.req.Data)]
+	ctx.resp.Header = (*proto.OutHeader)(unsafe.Pointer(&ctx.resp.Data[0]))
 
 	go func() {
 		if err := c.handle(ctx); err != nil {
@@ -220,7 +218,7 @@ func (c *conn) handle(ctx *Context) error {
 	*ctx.resp.Header = proto.OutHeader{
 		Unique: ctx.req.Header.Unique,
 		Error:  -int32(errno),
-		Len:    headerOutSize + size,
+		Len:    uint32(headerOutSize + size),
 	}
 
 	if c.sess.opts.WriteTimeout > 0 {
@@ -230,8 +228,7 @@ func (c *conn) handle(ctx *Context) error {
 		}
 	}
 
-	p := ctx.buf[ctx.req.Header.Len : ctx.req.Header.Len+ctx.resp.Header.Len]
-	if _, err = c.dev.Write(p); err != nil {
+	if _, err = c.dev.Write(ctx.resp.Data[:ctx.resp.Header.Len]); err != nil {
 		return fmt.Errorf("failed to write response for OP_%s: %w", code, err)
 	}
 	return nil
@@ -240,14 +237,17 @@ func (c *conn) handle(ctx *Context) error {
 func (c *conn) acquireCtx() (ctx *Context) {
 	v := ctxPool.Get()
 	if v == nil {
+		buf := make([]byte, 64*1024)
 		ctx = &Context{
-			buf: make([]byte, 64*1024),
+			req: RawRequest{
+				Header: (*proto.InHeader)(unsafe.Pointer(&buf[0])),
+				Data:   buf,
+			},
 		}
-		ctx.req.Header = (*proto.InHeader)(unsafe.Pointer(&ctx.buf[0]))
-		ctx.req.Data = unsafe.Pointer(&ctx.buf[headerInSize])
 	} else {
 		ctx = v.(*Context)
 	}
+	ctx.req.Data = ctx.req.Data[:cap(ctx.req.Data)]
 	ctx.resp = RawResponse{}
 	ctx.sess = c.sess
 	return ctx
