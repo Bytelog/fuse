@@ -43,15 +43,15 @@ func (o Options) String() string {
 }
 
 type Server struct {
-	target  string
-	handler Handler
-	conn    *net.UnixConn
+	target string
+	fs     Filesystem
+	conn   *net.UnixConn
 
 	session *session
 }
 
-func Serve(fs Handler, target string) error {
-	return (&Server{handler: fs}).Serve(target)
+func Serve(fs Filesystem, target string) error {
+	return (&Server{fs: fs}).Serve(target)
 }
 
 func (s *Server) Serve(target string) error {
@@ -79,10 +79,10 @@ func (s *Server) Serve(target string) error {
 	}()
 
 	sess := &session{
-		handler: s.handler,
-		opts:    defaultOpts,
-		errc:    make(chan error, 1),
-		sem:     semaphore{avail: 1},
+		fs:   s.fs,
+		opts: defaultOpts,
+		errc: make(chan error, 1),
+		sem:  semaphore{avail: 1},
 	}
 	return sess.loop(dev)
 }
@@ -118,9 +118,9 @@ var defaultOpts = opts{
 }
 
 type session struct {
-	handler Handler
-	opts    opts
-	errc    chan error
+	fs   Filesystem
+	opts opts
+	errc chan error
 
 	minor uint32
 	sem   semaphore
@@ -134,8 +134,8 @@ func (s *session) loop(dev *os.File) error {
 	// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
 
 	c := &conn{
-		sess: s,
-		dev:  dev,
+		session: s,
+		dev:     dev,
 	}
 
 	c.poll()
@@ -143,8 +143,8 @@ func (s *session) loop(dev *os.File) error {
 }
 
 type conn struct {
-	sess *session
-	dev  *os.File
+	*session
+	dev *os.File
 }
 
 // poll is a read loop. it waits for requests from the kernel and performs some
@@ -163,29 +163,24 @@ var ctxPool sync.Pool
 func (c *conn) accept() (err error) {
 	defer closeOnErr(c.dev, &err)
 
-	if c.sess.opts.ReadTimeout > 0 {
+	if c.opts.ReadTimeout > 0 {
 		// todo: each time this gets reset, consider
 		// bumping number of workers based on some heuristic
-		deadline := time.Now().Add(c.sess.opts.ReadTimeout)
+		deadline := time.Now().Add(c.opts.ReadTimeout)
 		if err := c.dev.SetReadDeadline(deadline); err != nil {
 			panic(err)
 		}
 	}
 
 	ctx := c.acquireCtx()
-	n, err := c.dev.Read(ctx.req.Data)
+	n, err := c.dev.Read(ctx.buf)
 	if err != nil {
 		return fmt.Errorf("failed read from fuse device: %w", err)
 	}
 
-	if n < int(headerInSize) || n < int(ctx.req.Header.Len) {
+	if n < int(headerInSize) || n < int(ctx.len) {
 		return fmt.Errorf("unexpected request size: %d", n)
 	}
-
-	// split req, resp buffer slices
-	ctx.req.Data = ctx.req.Data[:ctx.req.Header.Len]
-	ctx.resp.Data = ctx.req.Data[len(ctx.req.Data):cap(ctx.req.Data)]
-	ctx.resp.Header = (*proto.OutHeader)(unsafe.Pointer(&ctx.resp.Data[0]))
 
 	go func() {
 		if err := c.handle(ctx); err != nil {
@@ -200,36 +195,133 @@ func (c *conn) accept() (err error) {
 }
 
 func (c *conn) handle(ctx *Context) error {
-	code := ctx.req.Header.OpCode
-	if len(ops) < int(code) || ops[code] == nil {
-		return fmt.Errorf("%w: %s", ErrUnsupportedOp, code)
-	}
+	var err error
+	var size uintptr
 
-	size, err := ops[code](ctx)
+	// todo: clear output first
+
+	switch ctx.Op {
+	case proto.LOOKUP:
+		size = unsafe.Sizeof(LookupOut{})
+		err = c.fs.Lookup(ctx, &LookupIn{Name: ctx.strings(1)[0]}, (*LookupOut)(ctx.outzero(size)))
+	case proto.FORGET:
+		c.fs.Forget(ctx, (*ForgetIn)(ctx.in()))
+		return nil
+	case proto.GETATTR:
+		if c.minor < 9 {
+			ctx.shift(int(unsafe.Sizeof(GetattrIn{})))
+		}
+		size = unsafe.Sizeof(GetattrOut{})
+		err = c.fs.Getattr(ctx, (*GetattrIn)(ctx.in()), (*GetattrOut)(ctx.outzero(size)))
+	case proto.SETATTR:
+		size = unsafe.Sizeof(SetattrOut{})
+		err = c.fs.Setattr(ctx, (*SetattrIn)(ctx.in()), (*SetattrOut)(ctx.outzero(size)))
+	case proto.READLINK:
+		out := ReadlinkOut{}
+		err = c.fs.Readlink(ctx, &out)
+		size = uintptr(ctx.writeString(out.Name))
+	case proto.SYMLINK:
+		names := ctx.strings(2)
+		size = unsafe.Sizeof(SymlinkOut{})
+		err = c.fs.Symlink(ctx, &SymlinkIn{Name: names[0], Linkname: names[1]}, (*SymlinkOut)(ctx.outzero(size)))
+	case proto.MKNOD:
+		if c.minor < 12 {
+			ctx.shift(int(unsafe.Sizeof(proto.MknodIn{})) - proto.COMPAT_MKNOD_IN_SIZE)
+		}
+		rawIn := (*proto.MknodIn)(ctx.in())
+		in := MknodIn{
+			Name:  ctx.strings(1)[0],
+			Mode:  rawIn.Mode,
+			Rdev:  rawIn.Rdev,
+			Umask: rawIn.Umask,
+		}
+		size = unsafe.Sizeof(MknodOut{})
+		err = c.fs.Mknod(ctx, &in, (*MknodOut)(ctx.outzero(size)))
+	case proto.MKDIR:
+		rawIn := (*proto.MkdirIn)(ctx.in())
+		in := &MkdirIn{
+			Name:  ctx.strings(1)[0],
+			Mode:  rawIn.Mode,
+			Umask: rawIn.Umask,
+		}
+		size = unsafe.Sizeof(MkdirOut{})
+		err = c.fs.Mkdir(ctx, in, (*MkdirOut)(ctx.outzero(size)))
+	case proto.UNLINK:
+	case proto.RMDIR:
+	case proto.RENAME:
+	case proto.LINK:
+	case proto.OPEN:
+	case proto.READ:
+	case proto.WRITE:
+	case proto.STATFS:
+	case proto.RELEASE:
+	case proto.FSYNC:
+	case proto.SETXATTR:
+	case proto.GETXATTR:
+	case proto.LISTXATTR:
+	case proto.REMOVEXATTR:
+	case proto.FLUSH:
+	case proto.INIT:
+		err = ctx.handleInit((*InitIn)(ctx.in()), (*InitOut)(ctx.out()))
+		switch {
+		case c.minor < 5:
+			size += proto.COMPAT_INIT_OUT_SIZE
+		case c.minor < 23:
+			size += proto.COMPAT_22_INIT_OUT_SIZE
+		default:
+			size += unsafe.Sizeof(InitOut{})
+		}
+	case proto.OPENDIR:
+	case proto.READDIR:
+	case proto.RELEASEDIR:
+	case proto.FSYNCDIR:
+	case proto.GETLK:
+	case proto.SETLK:
+	case proto.SETLKW:
+	case proto.ACCESS:
+		err = c.fs.Access(ctx, (*AccessIn)(ctx.in()))
+	case proto.CREATE:
+	case proto.INTERRUPT:
+	case proto.BMAP:
+	case proto.DESTROY:
+		// todo: server shutdown
+		err = c.fs.Destroy(ctx)
+	case proto.IOCTL:
+	case proto.POLL:
+	case proto.NOTIFY_REPLY:
+	case proto.BATCH_FORGET:
+	case proto.FALLOCATE:
+	case proto.READDIRPLUS:
+	case proto.RENAME2:
+	case proto.LSEEK:
+	case proto.COPY_FILE_RANGE:
+	default:
+		return fmt.Errorf("%w: (%d)", ErrUnsupportedOp, ctx.Op)
+	}
 
 	var errno syscall.Errno
-	if errors.As(err, &errno) && errno != 0 {
+	switch {
+	case errors.As(err, &errno) && errno != 0:
 		size, err = 0, nil
-	}
-	if err != nil {
-		return fmt.Errorf("handler error in OP_%s: %w", code, err)
+	case err != nil:
+		return fmt.Errorf("handler error in %s: %w", ctx, err)
 	}
 
-	*ctx.resp.Header = proto.OutHeader{
-		Unique: ctx.req.Header.Unique,
+	*ctx.outHeader() = proto.OutHeader{
+		Unique: ctx.ID,
 		Error:  -int32(errno),
 		Len:    uint32(headerOutSize + size),
 	}
 
-	if c.sess.opts.WriteTimeout > 0 {
-		deadline := time.Now().Add(c.sess.opts.WriteTimeout)
+	if c.opts.WriteTimeout > 0 {
+		deadline := time.Now().Add(c.opts.WriteTimeout)
 		if err := c.dev.SetWriteDeadline(deadline); err != nil {
 			panic(err)
 		}
 	}
 
-	if _, err = c.dev.Write(ctx.resp.Data[:ctx.resp.Header.Len]); err != nil {
-		return fmt.Errorf("failed to write response for OP_%s: %w", code, err)
+	if _, err = c.dev.Write(ctx.outBuf()[:size]); err != nil {
+		return fmt.Errorf("failed to write response for %s: %w", ctx, err)
 	}
 	return nil
 }
@@ -238,18 +330,12 @@ func (c *conn) acquireCtx() (ctx *Context) {
 	v := ctxPool.Get()
 	if v == nil {
 		buf := make([]byte, 64*1024)
-		ctx = &Context{
-			req: RawRequest{
-				Header: (*proto.InHeader)(unsafe.Pointer(&buf[0])),
-				Data:   buf,
-			},
-		}
+		ctx = (*Context)(unsafe.Pointer(&buf[0]))
+		ctx.buf = buf[unsafe.Offsetof(ctx.Header):]
 	} else {
 		ctx = v.(*Context)
 	}
-	ctx.req.Data = ctx.req.Data[:cap(ctx.req.Data)]
-	ctx.resp = RawResponse{}
-	ctx.sess = c.sess
+	ctx.sess = c.session
 	return ctx
 }
 

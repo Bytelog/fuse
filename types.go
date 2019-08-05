@@ -8,10 +8,14 @@ import (
 )
 
 type Context struct {
-	req  RawRequest
-	resp RawResponse
+	noCopy noCopy
 
+	buf  []byte
+	off  int
 	sess *session
+
+	// Request buffer begins here. NO ADDITIONAL FIELDS BELOW THIS LINE.
+	Header
 }
 
 func (ctx *Context) Interrupt() <-chan struct{} {
@@ -19,49 +23,76 @@ func (ctx *Context) Interrupt() <-chan struct{} {
 }
 
 func (ctx *Context) String() string {
-	return "OP_" + ctx.req.Header.OpCode.String()
+	return "OP_" + ctx.Op.String()
 }
 
-// pointer to the request buffer, reserved up to size bytes.
-func (ctx *Context) in(size uintptr) unsafe.Pointer {
-	if len(ctx.req.Data) < int(size) {
-		panic("requested size overflows request buffer")
-	}
-	return unsafe.Pointer(&ctx.req.Data[0])
+// pointer to the request data
+func (ctx *Context) in() unsafe.Pointer {
+	return unsafe.Pointer(&ctx.buf[headerInSize])
 }
 
-// pointer to the request buffer's data segment, reserved up to size bytes
-func (ctx *Context) inData(size uintptr) unsafe.Pointer {
-	if len(ctx.req.Data)-int(headerInSize) < int(size) {
-		panic("requested size overflows request buffer")
-	}
-	return unsafe.Pointer(&ctx.req.Data[headerInSize])
+// pointer to the response data
+func (ctx *Context) out() unsafe.Pointer {
+	return unsafe.Pointer(&ctx.buf[ctx.off+int(headerOutSize)])
 }
 
-// pointer to the response buffer, clearing bytes if requested.
-func (ctx *Context) out(clear uintptr) unsafe.Pointer {
-	if clear > 0 {
-		data := ctx.resp.Data[:clear]
-		for i := range data {
-			data[i] = 0
+// pointer to the response buffer, with size bytes zero initialized
+func (ctx *Context) outzero(size uintptr) unsafe.Pointer {
+	start := ctx.off + int(headerOutSize)
+	if size > 0 {
+		buf := ctx.buf[start : start+int(size)]
+		for i := range buf {
+			buf[i] = 0
 		}
 	}
-	return unsafe.Pointer(&ctx.resp.Data[0])
+	return unsafe.Pointer(&ctx.buf[start])
 }
 
-// pointer to the response buffer's data segment, clearing bytes if requested.
-func (ctx *Context) outData(clear uintptr) unsafe.Pointer {
-	if clear > 0 {
-		data := ctx.resp.Data[headerOutSize : headerOutSize+clear]
-		for i := range data {
-			data[i] = 0
+func (ctx *Context) outBuf() []byte {
+	return ctx.buf[ctx.len:]
+}
+
+func (ctx *Context) outData() []byte {
+	return ctx.buf[ctx.len+uint32(headerOutSize):]
+}
+
+func (ctx *Context) outHeader() *proto.OutHeader {
+	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.len]))
+}
+
+func (ctx *Context) bytes(off uintptr) []byte {
+	return ctx.buf[headerInSize+off : ctx.off]
+}
+
+func (ctx *Context) strings(n int) []string {
+	buf := ctx.bytes(0)
+	s := make([]string, n)
+
+	for i := range s {
+		n := strlen(buf)
+		s[i] = string(buf[:n])
+		if len(buf) == n {
+			return s
 		}
 	}
-	return unsafe.Pointer(&ctx.resp.Data[headerOutSize])
+	return s
 }
 
-func (ctx *Context) bytes(off int) []byte {
-	return ctx.req.Data[int(headerInSize)+off:]
+// bump the input buffer size and memclr the affected bytes
+func (ctx *Context) shift(n int) {
+	buf := ctx.buf[ctx.off : ctx.off+n]
+	for i := range buf {
+		buf[i] = 0
+	}
+	ctx.off += n
+}
+
+func (ctx *Context) writeString(s string) (n int) {
+	// todo: bounds check
+	buf := ctx.outData()
+	n = copy(buf, s)
+	buf[n] = 0
+	return n + 1
 }
 
 var (
@@ -72,7 +103,7 @@ var (
 
 type Header struct {
 	len    uint32
-	code   proto.OpCode
+	Op     proto.OpCode
 	ID     uint64
 	NodeID uint64
 	UID    uint32
@@ -86,7 +117,6 @@ type outHeader struct {
 }
 
 type InitIn struct {
-	Header
 	Major        uint32
 	Minor        uint32
 	MaxReadahead uint32
@@ -94,7 +124,6 @@ type InitIn struct {
 }
 
 type InitOut struct {
-	outHeader
 	major               uint32
 	minor               uint32
 	MaxReadahead        uint32
@@ -109,17 +138,11 @@ type InitOut struct {
 }
 
 type AccessIn struct {
-	Header
 	Mask uint32
 	_    uint32
 }
 
-type AccessOut struct {
-	outHeader
-}
-
 type GetattrIn struct {
-	Header
 	// normally used to tell if Fh is set. We don't expose the flag bits since
 	// we don't consider 0 a valid file handle.
 	flags uint32
@@ -128,7 +151,6 @@ type GetattrIn struct {
 }
 
 type GetattrOut struct {
-	outHeader
 	AttrValid     uint64
 	AttrValidNsec uint32
 	_             uint32
@@ -154,15 +176,52 @@ type Attr struct {
 	_         uint32
 }
 
-type DestroyIn struct{ Header }
-type DestroyOut struct{ outHeader }
-
 type LookupIn struct {
-	Header
+	Name string
 }
 
 type LookupOut struct {
-	outHeader
+	EntryOut
+}
+
+type ForgetIn struct {
+	NLookup uint64
+}
+
+type SetattrValid uint32
+
+func (v SetattrValid) Mode() bool      { return v&proto.FATTR_MODE != 0 }
+func (v SetattrValid) UID() bool       { return v&proto.FATTR_UID != 0 }
+func (v SetattrValid) GID() bool       { return v&proto.FATTR_GID != 0 }
+func (v SetattrValid) Size() bool      { return v&proto.FATTR_SIZE != 0 }
+func (v SetattrValid) Atime() bool     { return v&proto.FATTR_ATIME != 0 }
+func (v SetattrValid) Mtime() bool     { return v&proto.FATTR_MTIME != 0 }
+func (v SetattrValid) Fh() bool        { return v&proto.FATTR_FH != 0 }
+func (v SetattrValid) AtimeNow() bool  { return v&proto.FATTR_ATIME_NOW != 0 }
+func (v SetattrValid) MtimeNow() bool  { return v&proto.FATTR_MTIME_NOW != 0 }
+func (v SetattrValid) LockOwner() bool { return v&proto.FATTR_LOCKOWNER != 0 }
+func (v SetattrValid) Ctime() bool     { return v&proto.FATTR_CTIME != 0 }
+
+type SetattrIn struct {
+	Valid     SetattrValid
+	_         uint32
+	Fh        uint64
+	Size      uint64
+	LockOwner uint64
+	Atime     uint64
+	Mtime     uint64
+	Ctime     uint64
+	Atimensec uint32
+	Mtimensec uint32
+	Ctimensec uint32
+	Mode      uint32
+	_         uint32
+	Uid       uint32
+	Gid       uint32
+	_         uint32
+}
+
+type SetattrOut struct {
 	EntryOut
 }
 
@@ -182,4 +241,49 @@ type EntryOut struct {
 	EntryValidNsec uint32
 	AttrValidNsec  uint32
 	Attr           Attr
+}
+
+type ReadlinkOut struct {
+	Name string
+}
+
+type SymlinkIn struct {
+	Name     string
+	Linkname string
+}
+
+type SymlinkOut struct {
+	EntryOut
+}
+
+// nocast
+type MknodIn struct {
+	Name  string
+	Mode  uint32
+	Rdev  uint32
+	Umask uint32
+	_     uint32
+}
+
+type MknodOut struct {
+	EntryOut
+}
+
+type MkdirIn struct {
+	Name  string
+	Mode  uint32
+	Umask uint32
+}
+
+type MkdirOut struct {
+	EntryOut
+}
+
+func strlen(n []byte) int {
+	for i := 0; i < len(n); i++ {
+		if n[i] == 0 {
+			return i
+		}
+	}
+	return len(n)
 }

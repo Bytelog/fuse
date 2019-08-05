@@ -1,15 +1,24 @@
 package fuse
 
+import "bytelog.org/fuse/proto"
+
 type Request interface{}
 
 type Response interface{}
 
-type Handler interface {
+type Filesystem interface {
 	Init(*Context, *InitIn, *InitOut) error
-	Access(*Context, *AccessIn, *AccessOut) error
+	Access(*Context, *AccessIn) error
 	Getattr(*Context, *GetattrIn, *GetattrOut) error
-	Destroy(*Context, *DestroyIn, *DestroyOut) error
+	Destroy(*Context) error
 	Lookup(*Context, *LookupIn, *LookupOut) error
+	Forget(*Context, *ForgetIn)
+	Setattr(*Context, *SetattrIn, *SetattrOut) error
+	Readlink(*Context, *ReadlinkOut) error
+	Symlink(*Context, *SymlinkIn, *SymlinkOut) error
+	Mknod(*Context, *MknodIn, *MknodOut) error
+	Mkdir(*Context, *MkdirIn, *MkdirOut) error
+	// todo: what about *EntryOut? Less types?
 	/*Destroy(*Context, *DestroyIn, *DestroyOut) error
 	Access(*Context, *AccessIn, *AccessOut) error
 	Lookup(*Context, *LookupIn, *LookupOut) error
@@ -43,33 +52,57 @@ type Handler interface {
 	*/
 }
 
-var _ Handler = HandlerFunc(nil)
+var _ Filesystem = HandlerFunc(nil)
 
 type HandlerFunc func(*Context, Request, Response) error
 
-func (f HandlerFunc) Lookup(ctx *Context, req *LookupIn, resp *LookupOut) error {
-	return f(ctx, req, resp)
+func (f HandlerFunc) Lookup(ctx *Context, in *LookupIn, out *LookupOut) error {
+	return f(ctx, in, out)
 }
 
-func (f HandlerFunc) Init(ctx *Context, req *InitIn, resp *InitOut) error {
-	return f(ctx, req, resp)
+func (f HandlerFunc) Forget(ctx *Context, in *ForgetIn) {
+	f(ctx, in, nil)
 }
 
-func (f HandlerFunc) Access(ctx *Context, req *AccessIn, resp *AccessOut) error {
-	return f(ctx, req, resp)
+func (f HandlerFunc) Init(ctx *Context, in *InitIn, out *InitOut) error {
+	return f(ctx, in, out)
 }
 
-func (f HandlerFunc) Getattr(ctx *Context, req *GetattrIn, resp *GetattrOut) error {
-	return f(ctx, req, resp)
+func (f HandlerFunc) Access(ctx *Context, in *AccessIn) error {
+	return f(ctx, in, nil)
 }
 
-func (f HandlerFunc) Destroy(ctx *Context, req *DestroyIn, resp *DestroyOut) error {
-	return f(ctx, req, resp)
+func (f HandlerFunc) Getattr(ctx *Context, in *GetattrIn, out *GetattrOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Destroy(ctx *Context) error {
+	return f(ctx, nil, nil)
+}
+
+func (f HandlerFunc) Setattr(ctx *Context, in *SetattrIn, out *SetattrOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Readlink(ctx *Context, out *ReadlinkOut) error {
+	return f(ctx, nil, out)
+}
+
+func (f HandlerFunc) Symlink(ctx *Context, in *SymlinkIn, out *SymlinkOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Mknod(ctx *Context, in *MknodIn, out *MknodOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Mkdir(ctx *Context, in *MkdirIn, out *MkdirOut) error {
+	return f(ctx, in, out)
 }
 
 var DefaultFilesystem = HandlerFunc(func(ctx *Context, req Request, resp Response) error {
-	switch req.(type) {
-	case *InitIn:
+	switch ctx.Op {
+	case proto.INIT:
 		return nil
 	default:
 		return ENOSYS

@@ -18,56 +18,6 @@ const (
 	headerOutSize = unsafe.Sizeof(proto.OutHeader{})
 )
 
-type operation func(*Context) (size uintptr, err error)
-
-var ops = [...]operation{
-	// proto.LOOKUP: handleLookup,
-	// proto.FORGET:          handleForget,
-	proto.GETATTR: handleGetattr,
-	// proto.SETATTR:         handleSetattr,
-	// proto.READLINK:        handleReadlink,
-	// proto.SYMLINK:         handleSymlink,
-	// proto.MKNOD:           handleMknod,
-	// proto.MKDIR:           handleMkdir,
-	// proto.UNLINK:          handleUnlink,
-	// proto.RMDIR:           handleRmdir,
-	// proto.RENAME:          handleRename,
-	// proto.LINK:            handleLink,
-	// proto.OPEN:            handleOpen,
-	// proto.READ:            handleRead,
-	// proto.WRITE:           handleWrite,
-	// proto.STATFS:          handleStates,
-	// proto.RELEASE:         handleRelease,
-	// proto.FSYNC:           handleFsync,
-	// proto.SETXATTR:        handleSetxattr,
-	// proto.GETXATTR:        handleGetxattr,
-	// proto.LISTXATTR:       handleListxattr,
-	// proto.REMOVEXATTR:     handleRemovexattr,
-	// proto.FLUSH:           handleFlush,
-	proto.INIT: handleInit,
-	// proto.OPENDIR: handleOpendir,
-	// proto.READDIR: handleReaddir,
-	// proto.RELEASEDIR:      handleReleasedir,
-	// proto.FSYNCDIR:        handleFsyncdir,
-	// proto.GETLK:           handleGetlk,
-	// proto.SETLK:           handleSetlk,
-	// proto.SETLKW:          handleSetlk,
-	proto.ACCESS: handleAccess,
-	// proto.CREATE:          handleCreate,
-	// proto.INTERRUPT:       handleInterrupt,
-	// proto.BMAP:            handleBmap,
-	proto.DESTROY: handleDestroy,
-	// proto.IOCTL:           handleIoctl,
-	// proto.POLL:            handlePoll,
-	// proto.NOTIFY_REPLY:    handleNotifyReply,
-	// proto.BATCH_FORGET:    handleBatchForget,
-	// proto.FALLOCATE:       handleFallocate,
-	// proto.READDIRPLUS:     handleReaddirplus,
-	// proto.RENAME2:         handleRename2,
-	// proto.LSEEK:           handleLseek,
-	// proto.COPY_FILE_RANGE: handleCopyFileRange,
-}
-
 type RawRequest struct {
 	Header *proto.InHeader
 	Data   []byte
@@ -78,50 +28,22 @@ type RawResponse struct {
 	Data   []byte
 }
 
-/*
-func handleLookup(ctx *Context) (size uintptr, err error) {
-	in, out := ctx.bytes(0), (*proto.EntryOut)(ctx.resp.Data)
-
-	if len(in) == 0 || in[len(in)-1] != 0 {
-		// todo: error handling at this context
-		panic("bad string")
-	}
-
-	// zero out the entry data
-	*out = proto.EntryOut{}
-
-	ctx.sess.handler.Lookup(
-		&LookupRequest{
-			Request: ctx.request(),
-			Name:    string(in[:len(in)-1]),
-		},
-		&LookupResponse{
-			response: ctx.response(),
-			EntryOut: out,
-		},
-	)
-}*/
-
-func handleInit(ctx *Context) (size uintptr, err error) {
+func (ctx *Context) handleInit(in *InitIn, out *InitOut) error {
 	// todo: determine support at runtime for cansplice, vmsplice
 	cansplice := true
 	vmsplice := true
 
-	in := (*proto.InitIn)(ctx.inData(unsafe.Sizeof(proto.InitIn{})))
-	out := (*proto.InitOut)(ctx.outData(0))
-	size = unsafe.Sizeof(out)
-
 	if in.Major < 7 {
-		return 0, EPROTO
+		return EPROTO
 	}
 
 	if in.Major > 7 {
 		// allow kernel to downgrade in followup INIT
-		*out = proto.InitOut{
-			Major: proto.KERNEL_VERSION,
-			Minor: proto.KERNEL_MINOR_VERSION,
+		*out = InitOut{
+			major: proto.KERNEL_VERSION,
+			minor: proto.KERNEL_MINOR_VERSION,
 		}
-		return size, nil
+		return nil
 	}
 
 	// mask out any unsupported flags
@@ -143,9 +65,9 @@ func handleInit(ctx *Context) (size uintptr, err error) {
 		in.Flags &^= proto.SPLICE_WRITE | proto.SPLICE_MOVE
 	}
 
-	*out = proto.InitOut{
-		Major:               proto.KERNEL_VERSION,
-		Minor:               proto.KERNEL_MINOR_VERSION,
+	*out = InitOut{
+		major:               proto.KERNEL_VERSION,
+		minor:               proto.KERNEL_MINOR_VERSION,
 		MaxReadahead:        in.MaxReadahead,
 		Flags:               in.Flags,
 		MaxBackground:       16,
@@ -159,41 +81,38 @@ func handleInit(ctx *Context) (size uintptr, err error) {
 		out.MaxPages = 0
 	}
 
-	if err = ctx.sess.handler.Init(ctx,
-		(*InitIn)(ctx.in(unsafe.Sizeof(InitIn{}))),
-		(*InitOut)(ctx.out(0)),
-	); err != nil {
-		return 0, err
+	if err := ctx.sess.fs.Init(ctx, in, out); err != nil {
+		return err
 	}
 
 	if extra := out.Flags &^ in.Flags; extra != 0 {
 		const format = "%w: flags (%X) not supported by kernel"
-		return 0, fmt.Errorf(format, EPROTO, extra)
+		return fmt.Errorf(format, EPROTO, extra)
 	}
 
 	if in.MaxReadahead < out.MaxReadahead {
 		const format = "%w: MaxReadahead size (%d) too large"
-		return 0, fmt.Errorf(format, EPROTO, out.MaxReadahead)
+		return fmt.Errorf(format, EPROTO, out.MaxReadahead)
 	}
 
 	if out.CongestionThreshold > out.MaxBackground {
 		const format = "%w: CongestionThreshold exceeds MaxBackground"
-		return 0, fmt.Errorf(format, EPROTO)
+		return fmt.Errorf(format, EPROTO)
 	}
 
 	if out.MaxWrite < proto.BUFFER_HEADER_SIZE {
 		const format = "%w: MaxWrite (%d) must be at least %d"
-		return 0, fmt.Errorf(format, EPROTO, out.MaxWrite, proto.BUFFER_HEADER_SIZE)
+		return fmt.Errorf(format, EPROTO, out.MaxWrite, proto.BUFFER_HEADER_SIZE)
 	}
 
 	if out.TimeGran < 1 || out.TimeGran > proto.MAX_TIME_GRAN {
 		const format = "%w: TimeGran (%d) must be between 1ns and 1s"
-		return 0, fmt.Errorf(format, EPROTO, out.TimeGran)
+		return fmt.Errorf(format, EPROTO, out.TimeGran)
 	}
 
 	if out.MaxPages > proto.MAX_MAX_PAGES {
 		const format = "%w: MaxPages (%d) cannot exceed %d"
-		return 0, fmt.Errorf(format, EPROTO, out.MaxPages, proto.MAX_MAX_PAGES)
+		return fmt.Errorf(format, EPROTO, out.MaxPages, proto.MAX_MAX_PAGES)
 	}
 
 	// user data has been accepted, apply it to our session
@@ -203,14 +122,7 @@ func handleInit(ctx *Context) (size uintptr, err error) {
 	ctx.sess.opts.maxWrite = out.MaxWrite
 	ctx.sess.opts.timeGran = out.TimeGran
 	ctx.sess.opts.maxPages = out.MaxPages
-
-	if in.Minor < 5 {
-		return proto.COMPAT_INIT_OUT_SIZE, nil
-	}
-	if in.Minor < 23 {
-		return proto.COMPAT_22_INIT_OUT_SIZE, nil
-	}
-	return size, nil
+	return nil
 }
 
 /*
@@ -250,31 +162,3 @@ func handleReaddir(ctx *Context) {
 	)
 }
 */
-
-func handleAccess(ctx *Context) (size uintptr, err error) {
-	return 0, ctx.sess.handler.Access(ctx,
-		(*AccessIn)(ctx.in(unsafe.Sizeof(AccessIn{}))),
-		(*AccessOut)(ctx.out(0)),
-	)
-}
-
-func handleGetattr(ctx *Context) (size uintptr, err error) {
-	out := (*GetattrOut)(ctx.out(unsafe.Sizeof(GetattrOut{})))
-	size = unsafe.Sizeof(proto.AttrOut{})
-
-	if ctx.sess.minor < 9 {
-		in := &GetattrIn{Header: *(*Header)(ctx.in(headerInSize))}
-		return size, ctx.sess.handler.Getattr(ctx, in, out)
-	}
-
-	in := (*GetattrIn)(ctx.in(unsafe.Sizeof(GetattrIn{})))
-	return size, ctx.sess.handler.Getattr(ctx, in, out)
-}
-
-func handleDestroy(ctx *Context) (size uintptr, err error) {
-	// todo: server shutdown
-	return 0, ctx.sess.handler.Destroy(ctx,
-		(*DestroyIn)(ctx.in(unsafe.Sizeof(DestroyIn{}))),
-		(*DestroyOut)(ctx.out(0)),
-	)
-}
