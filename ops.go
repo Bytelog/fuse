@@ -1,32 +1,11 @@
 package fuse
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"unsafe"
 
 	"bytelog.org/fuse/proto"
 )
-
-var (
-	ErrUnsupportedOp = errors.New("fuse: unsupported op")
-)
-
-const (
-	headerInSize  = unsafe.Sizeof(proto.InHeader{})
-	headerOutSize = unsafe.Sizeof(proto.OutHeader{})
-)
-
-type RawRequest struct {
-	Header *proto.InHeader
-	Data   []byte
-}
-
-type RawResponse struct {
-	Header *proto.OutHeader
-	Data   []byte
-}
 
 func (ctx *Context) handleInit(in *InitIn, out *InitOut) error {
 	// todo: determine support at runtime for cansplice, vmsplice

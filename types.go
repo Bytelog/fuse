@@ -7,6 +7,12 @@ import (
 	"bytelog.org/fuse/proto"
 )
 
+var (
+	ENOENT = syscall.ENOENT
+	ENOSYS = syscall.ENOSYS
+	EPROTO = syscall.EPROTO
+)
+
 type Context struct {
 	noCopy noCopy
 
@@ -95,12 +101,6 @@ func (ctx *Context) writeString(s string) (n int) {
 	return n + 1
 }
 
-var (
-	ENOENT = syscall.ENOENT
-	ENOSYS = syscall.ENOSYS
-	EPROTO = syscall.EPROTO
-)
-
 type Header struct {
 	len    uint32
 	Op     proto.OpCode
@@ -110,10 +110,6 @@ type Header struct {
 	GID    uint32
 	PID    uint32
 	_      uint32
-}
-
-type outHeader struct {
-	proto.OutHeader
 }
 
 type InitIn struct {
