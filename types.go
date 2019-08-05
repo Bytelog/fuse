@@ -70,6 +70,11 @@ func (ctx *Context) bytes(off uintptr) []byte {
 	return ctx.buf[headerInSize+off : ctx.off]
 }
 
+func (ctx *Context) string() string {
+	buf := ctx.bytes(0)
+	return string(buf[:strlen(buf)])
+}
+
 func (ctx *Context) strings(n int) []string {
 	buf := ctx.bytes(0)
 	s := make([]string, n)
@@ -80,6 +85,7 @@ func (ctx *Context) strings(n int) []string {
 		if len(buf) == n {
 			return s
 		}
+		buf = buf[n+1:]
 	}
 	return s
 }
@@ -273,6 +279,57 @@ type MkdirIn struct {
 
 type MkdirOut struct {
 	EntryOut
+}
+
+type UnlinkIn struct {
+	Name string
+}
+
+type RmdirIn struct {
+	Name string
+}
+
+type RenameIn struct {
+	Name    string
+	Newname string
+	Newdir  uint64
+}
+
+type Rename2In struct {
+	Newdir uint64
+	Flags  uint32
+	_      uint32
+}
+
+type LinkIn struct {
+	Oldnodeid uint64
+}
+
+type LinkOut struct {
+	EntryOut
+}
+
+type OpenIn struct {
+	Flags uint32
+	_     uint32
+}
+
+type OpenOut struct {
+	EntryOut
+}
+
+type ReadIn struct {
+	Fh        uint64
+	Offset    uint64
+	Size      uint32
+	ReadFlags uint32
+	LockOwner uint64
+	Flags     uint32
+	_         uint32
+}
+
+type ReadOut struct {
+	Data []byte
 }
 
 func strlen(n []byte) int {

@@ -18,6 +18,12 @@ type Filesystem interface {
 	Symlink(*Context, *SymlinkIn, *SymlinkOut) error
 	Mknod(*Context, *MknodIn, *MknodOut) error
 	Mkdir(*Context, *MkdirIn, *MkdirOut) error
+	Unlink(*Context, *UnlinkIn) error
+	Rmdir(*Context, *RmdirIn) error
+	Rename(*Context, *RenameIn) error
+	Link(*Context, *LinkIn, *LinkOut) error
+	Open(*Context, *OpenIn, *OpenOut) error
+	Read(*Context, *ReadIn, *ReadOut) error
 	// todo: what about *EntryOut? Less types?
 	/*Destroy(*Context, *DestroyIn, *DestroyOut) error
 	Access(*Context, *AccessIn, *AccessOut) error
@@ -97,6 +103,30 @@ func (f HandlerFunc) Mknod(ctx *Context, in *MknodIn, out *MknodOut) error {
 }
 
 func (f HandlerFunc) Mkdir(ctx *Context, in *MkdirIn, out *MkdirOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Unlink(ctx *Context, in *UnlinkIn) error {
+	return f(ctx, in, nil)
+}
+
+func (f HandlerFunc) Rmdir(ctx *Context, in *RmdirIn) error {
+	return f(ctx, in, nil)
+}
+
+func (f HandlerFunc) Rename(ctx *Context, in *RenameIn) error {
+	return f(ctx, in, nil)
+}
+
+func (f HandlerFunc) Link(ctx *Context, in *LinkIn, out *LinkOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Open(ctx *Context, in *OpenIn, out *OpenOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Read(ctx *Context, in *ReadIn, out *ReadOut) error {
 	return f(ctx, in, out)
 }
 

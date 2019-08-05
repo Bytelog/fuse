@@ -136,7 +136,7 @@ func (c *conn) handle(ctx *Context) error {
 	switch ctx.Op {
 	case proto.LOOKUP:
 		size = unsafe.Sizeof(LookupOut{})
-		err = c.fs.Lookup(ctx, &LookupIn{Name: ctx.strings(1)[0]}, (*LookupOut)(ctx.outzero(size)))
+		err = c.fs.Lookup(ctx, &LookupIn{Name: ctx.string()}, (*LookupOut)(ctx.outzero(size)))
 	case proto.FORGET:
 		c.fs.Forget(ctx, (*ForgetIn)(ctx.in()))
 		return nil
@@ -163,7 +163,7 @@ func (c *conn) handle(ctx *Context) error {
 		}
 		rawIn := (*proto.MknodIn)(ctx.in())
 		in := MknodIn{
-			Name:  ctx.strings(1)[0],
+			Name:  ctx.string(),
 			Mode:  rawIn.Mode,
 			Rdev:  rawIn.Rdev,
 			Umask: rawIn.Umask,
@@ -173,18 +173,36 @@ func (c *conn) handle(ctx *Context) error {
 	case proto.MKDIR:
 		rawIn := (*proto.MkdirIn)(ctx.in())
 		in := &MkdirIn{
-			Name:  ctx.strings(1)[0],
+			Name:  ctx.string(),
 			Mode:  rawIn.Mode,
 			Umask: rawIn.Umask,
 		}
 		size = unsafe.Sizeof(MkdirOut{})
 		err = c.fs.Mkdir(ctx, in, (*MkdirOut)(ctx.outzero(size)))
 	case proto.UNLINK:
+		err = c.fs.Unlink(ctx, &UnlinkIn{Name: ctx.string()})
 	case proto.RMDIR:
+		err = c.fs.Rmdir(ctx, &RmdirIn{Name: ctx.string()})
 	case proto.RENAME:
+		names := ctx.strings(2)
+		raw := (*proto.RenameIn)(ctx.in())
+		err = c.fs.Rename(ctx, &RenameIn{
+			Name:    names[0],
+			Newname: names[1],
+			Newdir:  raw.Newdir,
+		})
 	case proto.LINK:
+		size = unsafe.Sizeof(LinkOut{})
+		err = c.fs.Link(ctx, (*LinkIn)(ctx.in()), (*LinkOut)(ctx.outzero(size)))
 	case proto.OPEN:
+		// todo: pre-set flags for entryout requests?
+		size = unsafe.Sizeof(OpenOut{})
+		err = c.fs.Open(ctx, (*OpenIn)(ctx.in()), (*OpenOut)(ctx.outzero(size)))
 	case proto.READ:
+		// todo: compat for version 9, flocking
+		// todo: len resizing, bounds checking
+		err = c.fs.Read(ctx, (*ReadIn)(ctx.in()), &ReadOut{Data: ctx.outData()})
+		size = uintptr(len(ctx.outData()))
 	case proto.WRITE:
 	case proto.STATFS:
 	case proto.RELEASE:
