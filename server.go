@@ -97,18 +97,18 @@ func (s *Server) Serve(fs Filesystem, target string) (err error) {
 
 	if _, err = os.Stat(target); errors.Is(err, os.ErrNotExist) {
 		s.debugf("%s", err)
-		if err = os.Mkdir(target, 0777); err != nil {
+		s.debugf("mkdir %s -m 755", target)
+		if err = os.Mkdir(target, 0755); err != nil {
 			return err
 		}
 		s.created = target
-		s.debugf("created mount target '%s'", target)
 	}
 
 	// attempt to clean up any existing mounts
 	// todo: abort via fusectl?
 	_ = umount(target)
 
-	s.debugf("mounting target '%s'", target)
+	s.debugf("mounting target %s", target)
 	dev, err := mount(target)
 	if err != nil {
 		return err
@@ -149,12 +149,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	if s.target != "" {
-		s.debugf("unmounting target '%s'", s.target)
+		s.debugf("unmounting target %s", s.target)
 		errs = append(errs, umount(s.target))
 	}
 
 	if s.created != "" {
-		s.debugf("removing directory '%s'", s.created)
+		s.debugf("removing directory %s", s.created)
 		errs = append(errs, os.Remove(s.created))
 	}
 
