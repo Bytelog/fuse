@@ -96,7 +96,7 @@ func (s *Server) Serve(fs Filesystem, target string) (err error) {
 	}()
 
 	if _, err = os.Stat(target); errors.Is(err, os.ErrNotExist) {
-		s.logf("mount target '%s': %s", target, err)
+		s.debugf("%s", err)
 		if err = os.Mkdir(target, 0777); err != nil {
 			return err
 		}
