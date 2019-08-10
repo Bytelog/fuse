@@ -781,7 +781,7 @@ type CuseInitIn struct {
 type CuseInitOut struct {
 	Major    uint32
 	Minor    uint32
-	U        uint32
+	_        uint32
 	Flags    uint32
 	MaxRead  uint32
 	MaxWrite uint32
