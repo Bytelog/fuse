@@ -1,15 +1,38 @@
 package fuse
 
 import (
-	"net"
+	"context"
+	"errors"
+	"log"
 	"os"
+	"sync/atomic"
 )
+
+var (
+	ErrServerClosed = errors.New("fuse: server closed")
+)
+
+const (
+	start = iota + 1
+	serve
+	stop
+)
+
+type Logger interface {
+	Printf(format string, args ...interface{})
+}
 
 // from: http://man7.org/linux/man-pages/man8/mount.fuse.8.html
 // we may want to not support all of these. Just listing them for now.
 type Options struct {
-	// our options
-	Debug bool
+	// ErrorLog specifies an optional logger for errors encountered while
+	// serving filesystem requests.
+	// If nil, uses the log package's standard logger.
+	ErrorLog Logger
+
+	// DebugLog specifies an optional logger for debug information.
+	// If nil, debug information will not be logged.
+	DebugLog Logger
 
 	// mount options
 	DefaultPermissions bool
@@ -29,51 +52,136 @@ type Options struct {
 	AutoUnmount bool // can we make this default behavior? It's convenient.
 }
 
-func (o Options) String() string {
-	return ""
-}
-
 type Server struct {
-	target string
-	fs     Filesystem
-	conn   *net.UnixConn
+	Options Options
 
+	// mounted directory
+	target string
+
+	// directory created by the server
+	created string
+
+	state uint32
+
+	*logger
 	session *session
 }
 
-func Serve(fs Filesystem, target string) error {
-	return (&Server{fs: fs}).Serve(target)
-}
-
-func (s *Server) Serve(target string) error {
-
-	// create the mount directory
-	if _, err := os.Stat(target); os.IsNotExist(err) {
-		if err := os.Mkdir(target, 0777); err != nil {
-			return err
-		}
+// Mount the FUSE filesystem and handle requests, creating the target directory
+// if necessary. Blocks until the session has been initialized and is accepting
+// filesystem requests.
+//
+// ErrServerClosed is returned after a call to Shutdown, or on subsequent calls
+// to Serve.
+func (s *Server) Serve(fs Filesystem, target string) (err error) {
+	if !atomic.CompareAndSwapUint32(&s.state, 0, start) {
+		return ErrServerClosed
 	}
 
-	// attempt to clean up existing mounts
+	if fs == nil {
+		panic("fuse: nil filesystem")
+	}
+
+	s.logger = &logger{
+		ErrorLog: s.Options.ErrorLog,
+		DebugLog: s.Options.DebugLog,
+	}
+
+	defer func() {
+		atomic.StoreUint32(&s.state, serve)
+		if err != nil {
+			s.debugf("session error: %s", err)
+			_ = s.Shutdown(context.Background())
+		}
+	}()
+
+	if _, err = os.Stat(target); errors.Is(err, os.ErrNotExist) {
+		s.logf("mount target '%s': %s", target, err)
+		if err = os.Mkdir(target, 0777); err != nil {
+			return err
+		}
+		s.created = target
+		s.debugf("created mount target '%s'", target)
+	}
+
+	// attempt to clean up any existing mounts
 	// todo: abort via fusectl?
 	_ = umount(target)
 
-	// register the mount
+	s.debugf("mounting target '%s'", target)
 	dev, err := mount(target)
 	if err != nil {
 		return err
 	}
-
-	defer func() {
-		dev.Close()
-		umount(target)
-	}()
-
-	sess := &session{
-		fs:   s.fs,
-		opts: defaultOpts,
-		errc: make(chan error, 1),
-		sem:  semaphore{avail: 1},
+	s.target = target
+	s.session = &session{
+		logger: s.logger,
+		fs:     fs,
+		opts:   defaultOpts,
+		errc:   make(chan error, 1),
+		sem:    semaphore{avail: 1},
 	}
-	return sess.loop(dev)
+	return s.session.start(dev)
+}
+
+// Shutdown gracefully shuts down the FUSE server without interrupt any active
+// connections. Shutdown stops listening to requests and waits indefinitely for
+// each connection to become idle before closing it. Any directories or mounts
+// that were created by Serve will be removed.
+//
+// After Shutdown is called, future calls to Serve and Shutdown will return
+// ErrServerClosed.
+//
+// If the provided context expires before a graceful shutdown can complete,
+// Shutdown will forcefully abort the active fuse session.
+//
+// Returns any error encountered from the Server's connections.
+func (s *Server) Shutdown(ctx context.Context) error {
+	if !atomic.CompareAndSwapUint32(&s.state, serve, stop) {
+		return ErrServerClosed
+	}
+
+	var errs []error
+
+	if s.session != nil {
+		s.debugf("closing session")
+		errs = append(errs, s.session.close(ctx))
+	}
+
+	if s.target != "" {
+		s.debugf("unmounting target '%s'", s.target)
+		errs = append(errs, umount(s.target))
+	}
+
+	if s.created != "" {
+		s.debugf("removing directory '%s'", s.created)
+		errs = append(errs, os.Remove(s.created))
+	}
+
+	// report first error encountered
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type logger struct {
+	ErrorLog Logger
+	DebugLog Logger
+}
+
+func (l *logger) logf(format string, args ...interface{}) {
+	if l.ErrorLog != nil {
+		l.ErrorLog.Printf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
+}
+
+func (l *logger) debugf(format string, args ...interface{}) {
+	if l.DebugLog != nil {
+		l.DebugLog.Printf(format, args...)
+	}
 }

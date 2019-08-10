@@ -22,6 +22,7 @@ func (ctx *Context) handleInit(in *InitIn, out *InitOut) error {
 			major: proto.KERNEL_VERSION,
 			minor: proto.KERNEL_MINOR_VERSION,
 		}
+		ctx.sess.debugf("requesting protocol downgrade to 7.%d", out.minor)
 		return nil
 	}
 
@@ -95,6 +96,7 @@ func (ctx *Context) handleInit(in *InitIn, out *InitOut) error {
 	}
 
 	// user data has been accepted, apply it to our session
+	ctx.sess.ready = true
 	ctx.sess.minor = in.Minor
 	ctx.sess.opts.maxReadahead = out.MaxReadahead
 	ctx.sess.opts.flags = out.Flags

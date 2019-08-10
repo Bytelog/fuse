@@ -1,6 +1,7 @@
 package fuse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 )
 
 var (
+	ErrBadInit       = errors.New("fuse: protocol negotiation failed")
 	ErrUnsupportedOp = errors.New("fuse: unsupported op")
 )
 
@@ -53,28 +55,53 @@ var defaultOpts = opts{
 }
 
 type session struct {
+	*logger
+
 	fs   Filesystem
 	opts opts
 	errc chan error
 
+	dev   *os.File
 	minor uint32
 	sem   semaphore
+	ready bool
 }
 
-func (s *session) loop(dev *os.File) error {
+func (s *session) start(dev *os.File) error {
+	c := &conn{
+		session: s,
+		dev:     dev,
+	}
+
+	// allow up to three attempts for protocol negotiation
+	for i := 0; i < 3 && !s.ready; i++ {
+		s.debugf("protocol negotiation attempt %d", i+1)
+		if err := c.accept(); err != nil {
+			return err
+		}
+	}
+	if !s.ready {
+		return ErrBadInit
+	}
+	s.debugf("FUSE 7.%d accepted", s.minor)
+	go s.control(dev)
+	return nil
+}
+
+func (s *session) control(dev *os.File) {
+	// todo: open fusectl
+
 	// todo: dynamic thread scaling. fusectl for pending requests?
 
 	const threads = 4
 	// todo: open multiple connections to /dev/fuse to allow for multi-threading
 	// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
 
-	c := &conn{
-		session: s,
-		dev:     dev,
-	}
+}
 
-	c.poll()
-	return nil
+func (s *session) close(ctx context.Context) error {
+	// todo: forceful exit
+	return s.dev.Close()
 }
 
 type conn struct {
@@ -117,15 +144,15 @@ func (c *conn) accept() (err error) {
 		return fmt.Errorf("unexpected request size: %d", n)
 	}
 
-	go func() {
-		if err := c.handle(ctx); err != nil {
-			// todo: log error
-			fmt.Println(err)
-			panic(err)
-		}
-		c.releaseCtx(ctx)
-	}()
+	c.session.debugf("recv %s {ID:%d NodeID:%d UID:%d GID:%d PID:%d Len:%d}",
+		ctx, ctx.Header.ID, ctx.Header.NodeID, ctx.Header.UID, ctx.Header.GID,
+		ctx.Header.PID, ctx.Header.len)
 
+	ctx.off = int(ctx.len)
+	if err := c.handle(ctx); err != nil {
+		return fmt.Errorf("%s: %w", ctx, err)
+	}
+	c.releaseCtx(ctx)
 	return nil
 }
 
@@ -206,6 +233,7 @@ func (c *conn) handle(ctx *Context) error {
 	case proto.WRITE:
 	case proto.STATFS:
 	case proto.RELEASE:
+		// todo: lock handling
 	case proto.FSYNC:
 	case proto.SETXATTR:
 	case proto.GETXATTR:
@@ -244,8 +272,20 @@ func (c *conn) handle(ctx *Context) error {
 	case proto.FALLOCATE:
 	case proto.READDIRPLUS:
 	case proto.RENAME2:
+		names := ctx.strings(2)
+		raw := (*proto.Rename2In)(ctx.in())
+		err = c.fs.Rename(ctx, &RenameIn{
+			Name:    names[0],
+			Newname: names[1],
+			Newdir:  raw.Newdir,
+			Flags:   raw.Flags,
+		})
 	case proto.LSEEK:
+		size = unsafe.Sizeof(LseekOut{})
+		err = c.fs.Lseek(ctx, (*LseekIn)(ctx.in()), (*LseekOut)(ctx.outzero(size)))
 	case proto.COPY_FILE_RANGE:
+		err = c.fs.CopyFileRange(ctx, (*CopyFileRangeIn)(ctx.in()))
+		// todo: reply write
 	default:
 		return fmt.Errorf("%w: (%d)", ErrUnsupportedOp, ctx.Op)
 	}
@@ -258,7 +298,8 @@ func (c *conn) handle(ctx *Context) error {
 		return fmt.Errorf("handler error in %s: %w", ctx, err)
 	}
 
-	*ctx.outHeader() = proto.OutHeader{
+	header := ctx.outHeader()
+	*header = proto.OutHeader{
 		Unique: ctx.ID,
 		Error:  -int32(errno),
 		Len:    uint32(headerOutSize + size),
@@ -271,8 +312,10 @@ func (c *conn) handle(ctx *Context) error {
 		}
 	}
 
-	if _, err = c.dev.Write(ctx.outBuf()[:size]); err != nil {
-		return fmt.Errorf("failed to write response for %s: %w", ctx, err)
+	c.session.debugf("write %s {ID:%d Error:%d Len:%d}",
+		ctx, header.Unique, header.Error, header.Len)
+	if _, err = c.dev.Write(ctx.outBuf()[:header.Len]); err != nil {
+		return fmt.Errorf("failed to write response: %w", err)
 	}
 	return nil
 }

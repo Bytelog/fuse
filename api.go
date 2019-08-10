@@ -24,6 +24,10 @@ type Filesystem interface {
 	Link(*Context, *LinkIn, *LinkOut) error
 	Open(*Context, *OpenIn, *OpenOut) error
 	Read(*Context, *ReadIn, *ReadOut) error
+	Lseek(*Context, *LseekIn, *LseekOut) error
+	CopyFileRange(*Context, *CopyFileRangeIn) error
+	Release(*Context, *ReleaseIn) error
+
 	// todo: what about *EntryOut? Less types?
 	/*Destroy(*Context, *DestroyIn, *DestroyOut) error
 	Access(*Context, *AccessIn, *AccessOut) error
@@ -67,7 +71,7 @@ func (f HandlerFunc) Lookup(ctx *Context, in *LookupIn, out *LookupOut) error {
 }
 
 func (f HandlerFunc) Forget(ctx *Context, in *ForgetIn) {
-	f(ctx, in, nil)
+	_ = f(ctx, in, nil)
 }
 
 func (f HandlerFunc) Init(ctx *Context, in *InitIn, out *InitOut) error {
@@ -128,6 +132,18 @@ func (f HandlerFunc) Open(ctx *Context, in *OpenIn, out *OpenOut) error {
 
 func (f HandlerFunc) Read(ctx *Context, in *ReadIn, out *ReadOut) error {
 	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) Lseek(ctx *Context, in *LseekIn, out *LseekOut) error {
+	return f(ctx, in, out)
+}
+
+func (f HandlerFunc) CopyFileRange(ctx *Context, in *CopyFileRangeIn) error {
+	return f(ctx, in, nil)
+}
+
+func (f HandlerFunc) Release(ctx *Context, in *ReleaseIn) error {
+	return f(ctx, in, nil)
 }
 
 var DefaultFilesystem = HandlerFunc(func(ctx *Context, req Request, resp Response) error {

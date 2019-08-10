@@ -1,6 +1,7 @@
 package fuse
 
 import (
+	"fmt"
 	"syscall"
 	"unsafe"
 
@@ -39,7 +40,7 @@ func (ctx *Context) in() unsafe.Pointer {
 
 // pointer to the response data
 func (ctx *Context) out() unsafe.Pointer {
-	return unsafe.Pointer(&ctx.buf[ctx.off+int(headerOutSize)])
+	return unsafe.Pointer(&ctx.buf[ctx.off+int(headerInSize)])
 }
 
 // pointer to the response buffer, with size bytes zero initialized
@@ -116,6 +117,11 @@ type Header struct {
 	GID    uint32
 	PID    uint32
 	_      uint32
+}
+
+func (h Header) Debug() string {
+	return fmt.Sprintf("{ID:%d NodeID:%d UID:%d GID:%d PID:%d}",
+		h.ID, h.NodeID, h.UID, h.GID, h.PID)
 }
 
 type InitIn struct {
@@ -293,12 +299,7 @@ type RenameIn struct {
 	Name    string
 	Newname string
 	Newdir  uint64
-}
-
-type Rename2In struct {
-	Newdir uint64
-	Flags  uint32
-	_      uint32
+	Flags   uint32
 }
 
 type LinkIn struct {
@@ -330,6 +331,34 @@ type ReadIn struct {
 
 type ReadOut struct {
 	Data []byte
+}
+
+type LseekIn struct {
+	Fh     uint64
+	Offset uint64
+	Whence uint32
+	_      uint32
+}
+
+type LseekOut struct {
+	Offset uint64
+}
+
+type CopyFileRangeIn struct {
+	FhIn      uint64
+	OffIn     uint64
+	NodeidOut uint64
+	FhOut     uint64
+	OffOut    uint64
+	Len       uint64
+	Flags     uint64
+}
+
+type ReleaseIn struct {
+	Fh           uint64
+	Flags        uint32
+	ReleaseFlags uint32
+	LockOwner    uint64
 }
 
 func strlen(n []byte) int {

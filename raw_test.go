@@ -1,11 +1,59 @@
 package fuse
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"testing"
 	"time"
 )
+
+type loggy struct {
+	prefix string
+}
+
+func (l loggy) Printf(format string, args ...interface{}) {
+	_, _ = fmt.Printf(l.prefix+format+"\n", args...)
+}
+
+func setup(fs Filesystem, target string) (func() <-chan error, error) {
+	srv := &Server{
+		Options: Options{
+			ErrorLog: loggy{prefix: "== error: ",},
+			DebugLog: loggy{prefix: " - debug: ",},
+		},
+	}
+	if err := srv.Serve(fs, target); err != nil {
+		return nil, err
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+
+	done := make(chan struct{}, 1)
+	errc := make(chan error, 1)
+
+	go func() {
+		ctx := context.Background()
+		var cancel func()
+		select {
+		case <-sig:
+			ctx, cancel = context.WithCancel(ctx)
+			cancel()
+		case <-done:
+			ctx, cancel = context.WithTimeout(ctx, time.Second)
+			defer cancel()
+		}
+		errc <- srv.Shutdown(ctx)
+	}()
+
+	shutdown := func() <-chan error {
+		close(done)
+		return errc
+	}
+	return shutdown, nil
+}
 
 func LoggingMiddleware(h HandlerFunc) HandlerFunc {
 	return func(ctx *Context, req Request, resp Response) error {
@@ -14,12 +62,9 @@ func LoggingMiddleware(h HandlerFunc) HandlerFunc {
 }
 
 func TestBasic(t *testing.T) {
-	ready := make(chan struct{})
-
 	handler := func(ctx *Context, req Request, resp Response) error {
 		switch req.(type) {
 		case *InitIn:
-			close(ready)
 			return nil
 		// case *LookupIn:
 		//	return ENOENT
@@ -32,24 +77,22 @@ func TestBasic(t *testing.T) {
 	// attach logger
 	handler = LoggingMiddleware(handler)
 
-	go func() {
-		if err := Serve(HandlerFunc(handler), "/tmp/mnt"); err != nil {
-			panic(err)
-		}
-	}()
-
-	<-ready
-	f, err := os.Open("/tmp/mnt/")
+	shutdown, err := setup(HandlerFunc(handler), "/tmp/mount")
 	assert(t, err)
+	defer func() { <-shutdown() }()
 
-	names, err := f.Readdirnames(0)
-	assert(t, err)
+	/*
+		f, err := os.Open("/tmp/mount/")
+		assert(t, err)
 
-	fmt.Println("READDIR NAMES: ", names)
+		names, err := f.Readdirnames(0)
+		assert(t, err)
 
-	// wait with a timeout, in case fuse is misbehaving. Normally we should
-	// panic with i/o timeout before exiting.
-	time.Sleep(5 * time.Second)
+		fmt.Println("READDIR NAMES: ", names)
+	*/
+
+	time.Sleep(time.Second)
+	t.Fail()
 }
 
 func assert(t *testing.T, err error) {
