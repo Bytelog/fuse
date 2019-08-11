@@ -79,7 +79,7 @@ func TestBasic(t *testing.T) {
 
 	shutdown, err := setup(HandlerFunc(handler), "/tmp/mount")
 	assert(t, err)
-	defer func() { <-shutdown() }()
+	defer func() { _ = <-shutdown() }()
 
 	/*
 		f, err := os.Open("/tmp/mount/")
@@ -91,7 +91,7 @@ func TestBasic(t *testing.T) {
 		fmt.Println("READDIR NAMES: ", names)
 	*/
 
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 	t.Fail()
 }
 

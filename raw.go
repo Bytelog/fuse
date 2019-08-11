@@ -75,7 +75,7 @@ func (s *session) start(dev *os.File) error {
 
 	// allow up to three attempts for protocol negotiation
 	for i := 0; i < 3 && !s.ready; i++ {
-		s.debugf("protocol negotiation attempt %d", i+1)
+		s.debugf("protocol negotiation, attempt %d", i+1)
 		if err := c.accept(); err != nil {
 			return err
 		}
@@ -90,12 +90,27 @@ func (s *session) start(dev *os.File) error {
 
 func (s *session) control(dev *os.File) {
 	// todo: open fusectl
-
 	// todo: dynamic thread scaling. fusectl for pending requests?
 
 	const threads = 4
-	// todo: open multiple connections to /dev/fuse to allow for multi-threading
-	// IOCTL(FUSE_DEV_IOC_CLONE, &session_fd)
+
+	n, err := deviceNumber("/tmp/mount")
+	if err != nil {
+		panic(err)
+	}
+	count, err := fusectl_waiting(n)
+	if err != nil {
+		panic(err)
+	}
+
+	// it works! tomorrow we'll scale.
+	panic(fmt.Sprintf("COUNT: %d", count))
+
+	for i := 0; i < threads; i++ {
+		if _, err := clone(dev.Fd()); err != nil {
+			panic(err)
+		}
+	}
 
 }
 

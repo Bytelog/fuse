@@ -1,13 +1,21 @@
 package fuse
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"bytelog.org/fuse/proto"
 )
 
 func mount(target string) (*os.File, error) {
@@ -104,4 +112,66 @@ func unixPair(typ int) (pair [2]*os.File, err error) {
 	pair[0] = os.NewFile(uintptr(fds[0]), "")
 	pair[1] = os.NewFile(uintptr(fds[1]), "")
 	return
+}
+
+func clone(fd uintptr) (*os.File, error) {
+	clone, err := unix.Open("/dev/fuse", unix.O_RDWR|unix.O_CLOEXEC, 0755)
+	if err != nil {
+		return nil, err
+	}
+	err = unix.IoctlSetPointerInt(clone, uint(proto.DEV_IOC_CLONE), int(fd))
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.SetNonblock(clone, true); err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(clone), "/dev/fuse"), nil
+}
+
+func deviceNumber(target string) (int, error) {
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return 0, nil
+	}
+	defer f.Close()
+
+	// https://www.kernel.org/doc/Documentation/filesystems/proc.txt
+	const expr = `^[^:]+:(\d+) \S+ %s .+ - fuse /dev/fuse`
+	re := regexp.MustCompile(fmt.Sprintf(expr, regexp.QuoteMeta(target)))
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if matches := re.FindStringSubmatch(scanner.Text()); len(matches) > 1 {
+			return strconv.Atoi(matches[1])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return 0, fmt.Errorf("%s not found in mountinfo", target)
+}
+
+func fusectl_abort(device int) error {
+	path := fmt.Sprintf("/sys/fs/fuse/connections/%d/abort", device)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(f, "1")
+	return err
+}
+
+func fusectl_waiting(device int) (int, error) {
+	path := fmt.Sprintf("/sys/fs/fuse/connections/%d/waiting", device)
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	buf := make([]byte, 32)
+	if _, err = f.Read(buf); err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(buf)))
 }
