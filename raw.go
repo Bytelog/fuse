@@ -367,7 +367,7 @@ func (c *conn) handle(ctx *Context) error {
 		c.debugf("%+v", (*proto.AttrOut)(unsafe.Pointer(&buf[headerOutSize])))
 	}
 
-	c.debugf("write %s {ID:%d Error:%d Len:%d}",
+	c.debugf("send %s {ID:%d Error:%d Len:%d}",
 		ctx, header.Unique, header.Error, header.Len)
 	if _, err = c.dev.Write(ctx.outBuf()[:header.Len]); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
