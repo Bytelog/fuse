@@ -2,6 +2,7 @@ package mem
 
 import (
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ var (
 const (
 	validSec  = ^uint64(0)
 	validNano = uint32(999999999)
+	blockSize = 64 * 1024
 )
 
 func randint() uint64 {
@@ -63,8 +65,39 @@ func (l Link) Less(than btree.Item) bool {
 }
 
 type Node struct {
-	Attr  fuse.Attr
-	XAttr [][]byte
+	Name   string
+	Attr   fuse.Attr
+	XAttrs []XAttr
+}
+
+type XAttr struct {
+	Name  string
+	Value []byte
+}
+
+func (n Node) Getxattr(name string) ([]byte, bool) {
+	i := sort.Search(len(n.XAttrs), func(i int) bool {
+		return n.XAttrs[i].Name >= name
+	})
+	if i < len(n.XAttrs) && n.XAttrs[i].Name == name {
+		return n.XAttrs[i].Value, true
+	}
+	return nil, false
+}
+
+func (n *Node) Setxattr(name string, value []byte) {
+	i := sort.Search(len(n.XAttrs), func(i int) bool {
+		return n.XAttrs[i].Name >= name
+	})
+	if i < len(n.XAttrs) && n.XAttrs[i].Name == name {
+		n.XAttrs[i].Value = value
+	}
+	n.XAttrs = append(n.XAttrs, XAttr{})
+	copy(n.XAttrs[i+1:], n.XAttrs[i:])
+	n.XAttrs[i] = XAttr{
+		Name:  name,
+		Value: value,
+	}
 }
 
 type FS struct {
@@ -75,6 +108,9 @@ type FS struct {
 
 	nodeMu sync.RWMutex
 	nodes  map[uint64]*Node
+
+	openMu sync.RWMutex
+	open   map[uint64]*Node
 }
 
 func New() *FS {
@@ -92,10 +128,9 @@ func (fs *FS) Init(ctx *fuse.Context, _ *fuse.InitIn, _ *fuse.InitOut) error {
 	}
 	sec, nsec := now()
 	fs.nodes[link.NodeID] = &Node{
+		Name: "/",
 		Attr: fuse.Attr{
 			Ino:       1,
-			Size:      4096,
-			Blocks:    1,
 			Atime:     sec,
 			Atimensec: nsec,
 			Mtime:     sec,
@@ -106,7 +141,7 @@ func (fs *FS) Init(ctx *fuse.Context, _ *fuse.InitIn, _ *fuse.InitOut) error {
 			Nlink:     1,
 			Uid:       ctx.UID,
 			Gid:       ctx.GID,
-			Blksize:   4 * 1024,
+			Blksize:   blockSize,
 		},
 	}
 	fs.links.ReplaceOrInsert(link)
@@ -117,27 +152,78 @@ func (fs *FS) Access(_ *fuse.Context, in *fuse.AccessIn) error {
 	return nil
 }
 
+// Get file attributes.
+// ctx.NodeID: Node
+// in.Fh: File Handle (if non-zero)
+// out.Size may be ignored by the kernel if writeback caching is enabled.
 func (fs *FS) Getattr(ctx *fuse.Context, in *fuse.GetattrIn, out *fuse.GetattrOut) error {
-	// todo: respect FH & flag.
+	var node *Node
 
-	fs.linkMu.RLock()
-	defer fs.linkMu.RUnlock()
-
-	link, ok := fs.links.Get(key("/")).(*Link)
-	if !ok {
-		return fuse.ENOENT
+	if in.Fh > 0 {
+		fs.openMu.RLock()
+		node = fs.open[in.Fh]
+		fs.openMu.RUnlock()
+	} else {
+		fs.nodeMu.RLock()
+		node = fs.nodes[ctx.NodeID]
+		fs.nodeMu.RUnlock()
 	}
 
-	fs.nodeMu.RLock()
-	defer fs.nodeMu.RUnlock()
-
-	node := fs.nodes[link.NodeID]
 	*out = fuse.GetattrOut{
 		AttrValid:     validSec,
 		AttrValidNsec: validNano,
 		Attr:          node.Attr,
 	}
-	out.Attr.Uid = ctx.UID
-	out.Attr.Gid = ctx.GID
 	return nil
+}
+
+// Get an extended attribute of a node
+// in.Size: maximum size of the value to send
+func (fs *FS) Getxattr(ctx *fuse.Context, in *fuse.GetxattrIn, out *fuse.GetxattrOut) error {
+	fs.nodeMu.RLock()
+	defer fs.nodeMu.RUnlock()
+
+	node, ok := fs.nodes[ctx.NodeID]
+	if !ok {
+		return fuse.ENOENT
+	}
+
+	out.Value, _ = node.Getxattr(in.Name)
+	return nil
+}
+
+// Look up an entry by name and get its attributes.
+// ctx.NodeID: Parent Directory
+// in.Name: Entry Name
+func (fs *FS) Lookup(ctx *fuse.Context, in *fuse.LookupIn, out *fuse.LookupOut) error {
+	fs.nodeMu.RLock()
+	defer fs.nodeMu.RUnlock()
+
+	parent, ok := fs.nodes[ctx.NodeID]
+	if !ok {
+		return fuse.ENOENT
+	}
+
+	fs.linkMu.RLock()
+	defer fs.linkMu.RUnlock()
+
+	link, ok := fs.links.Get(key(parent.Name + in.Name)).(*Link)
+	if !ok {
+		return fuse.ENOENT
+	}
+
+	node, ok := fs.nodes[link.NodeID]
+	*out = fuse.LookupOut{
+		EntryOut: fuse.EntryOut{
+			Nodeid:         link.NodeID,
+			Generation:     1, // todo: uniqueness
+			EntryValid:     validSec,
+			EntryValidNsec: validNano,
+			AttrValid:      validSec,
+			AttrValidNsec:  validNano,
+			Attr:           node.Attr,
+		},
+	}
+
+	return fuse.ENOENT
 }

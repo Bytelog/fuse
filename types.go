@@ -361,6 +361,16 @@ type ReleaseIn struct {
 	LockOwner    uint64
 }
 
+// nocast
+type GetxattrIn struct {
+	Name string
+}
+
+// nocast
+type GetxattrOut struct {
+	Value []byte
+}
+
 func strlen(n []byte) int {
 	for i := 0; i < len(n); i++ {
 		if n[i] == 0 {

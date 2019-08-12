@@ -287,6 +287,8 @@ func (c *conn) handle(ctx *Context) error {
 	case proto.FSYNC:
 	case proto.SETXATTR:
 	case proto.GETXATTR:
+		size = unsafe.Sizeof(GetxattrOut{})
+		err = c.fs.Getxattr(ctx, (*GetxattrIn)(ctx.in()), (*GetxattrOut)(ctx.out()))
 	case proto.LISTXATTR:
 	case proto.REMOVEXATTR:
 	case proto.FLUSH:

@@ -64,15 +64,13 @@ func TestBasic(t *testing.T) {
 	assert(t, err)
 	defer func() { _ = <-shutdown() }()
 
-	_, err = os.OpenFile("/tmp/mnt/foo.txt", os.O_RDWR, 0755)
+	f, err := os.Open("/tmp/mnt/")
 	assert(t, err)
 
-	/*
-		names, err := f.Readdirnames(0)
-		assert(t, err)
+	names, err := f.Readdirnames(0)
+	assert(t, err)
 
-		fmt.Println("READDIR NAMES: ", names)
-	*/
+	fmt.Println("READDIR NAMES: ", names)
 
 	t.Fail()
 }

@@ -27,6 +27,7 @@ type Filesystem interface {
 	Lseek(*Context, *LseekIn, *LseekOut) error
 	CopyFileRange(*Context, *CopyFileRangeIn) error
 	Release(*Context, *ReleaseIn) error
+	Getxattr(*Context, *GetxattrIn, *GetxattrOut) error
 
 	// todo: what about *EntryOut? Less types?
 	/*Destroy(*Context, *DestroyIn, *DestroyOut) error
@@ -144,6 +145,10 @@ func (f HandlerFunc) CopyFileRange(ctx *Context, in *CopyFileRangeIn) error {
 
 func (f HandlerFunc) Release(ctx *Context, in *ReleaseIn) error {
 	return f(ctx, in, nil)
+}
+
+func (f HandlerFunc) Getxattr(ctx *Context, in *GetxattrIn, out *GetxattrOut) error {
+	return f(ctx, in, out)
 }
 
 var DefaultFilesystem = HandlerFunc(func(ctx *Context, req Request, resp Response) error {
