@@ -154,7 +154,8 @@ func (c *conn) poll() {
 		if err := c.accept(); err != nil {
 			// todo: on deadline error, determine whether or not to
 			// close connection
-			panic(err)
+			c.logf("accept error: %v", err)
+			return
 		}
 		select {
 		case <-c.done:

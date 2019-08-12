@@ -67,7 +67,6 @@ func TestBasic(t *testing.T) {
 	_, err = os.OpenFile("/tmp/mnt/foo.txt", os.O_RDWR, 0755)
 	assert(t, err)
 
-	fmt.Println("SUCCESS")
 	/*
 		names, err := f.Readdirnames(0)
 		assert(t, err)
