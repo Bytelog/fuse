@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"bytelog.org/fuse"
 
 	"github.com/google/btree"
@@ -100,7 +102,7 @@ func (fs *FS) Init(ctx *fuse.Context, _ *fuse.InitIn, _ *fuse.InitOut) error {
 			Mtimensec: nsec,
 			Ctime:     sec,
 			Ctimensec: nsec,
-			Mode:      0755,
+			Mode:      unix.S_IFDIR | 0755,
 			Nlink:     1,
 			Uid:       ctx.UID,
 			Gid:       ctx.GID,

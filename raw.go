@@ -362,11 +362,6 @@ func (c *conn) handle(ctx *Context) error {
 		}
 	}
 
-	if ctx.Op == proto.GETATTR {
-		buf := ctx.outBuf()[:header.Len]
-		c.debugf("%+v", (*proto.AttrOut)(unsafe.Pointer(&buf[headerOutSize])))
-	}
-
 	c.debugf("send %s {ID:%d Error:%d Len:%d}",
 		ctx, header.Unique, header.Error, header.Len)
 	if _, err = c.dev.Write(ctx.outBuf()[:header.Len]); err != nil {
