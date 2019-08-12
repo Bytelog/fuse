@@ -1,6 +1,7 @@
 package fuse
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -50,7 +51,7 @@ type opts struct {
 
 var defaultOpts = opts{
 	CloneFD:      true,
-	ReadTimeout:  time.Second,
+	ReadTimeout:  15 * time.Second,
 	WriteTimeout: time.Second,
 }
 
@@ -65,6 +66,12 @@ type session struct {
 	minor uint32
 	sem   semaphore
 	ready bool
+
+	connsMu sync.Mutex
+	conns   *list.List
+
+	starved chan struct{}
+	done    chan struct{}
 }
 
 func (s *session) start(dev *os.File) error {
@@ -89,33 +96,48 @@ func (s *session) start(dev *os.File) error {
 }
 
 func (s *session) control(dev *os.File) {
-	// todo: open fusectl
-	// todo: dynamic thread scaling. fusectl for pending requests?
+	const (
+		min = 1
+		max = 1
+	)
 
-	const threads = 4
+	fd := dev.Fd()
+	count := 0
 
-	n, err := deviceNumber("/tmp/mount")
-	if err != nil {
-		panic(err)
-	}
-	count, err := fusectl_waiting(n)
-	if err != nil {
-		panic(err)
-	}
+	for {
+		if count < max {
+			s.debugf("connections starved, cloning")
 
-	// it works! tomorrow we'll scale.
-	panic(fmt.Sprintf("COUNT: %d", count))
+			s.sem.release(1)
+			count++
 
-	for i := 0; i < threads; i++ {
-		if _, err := clone(dev.Fd()); err != nil {
-			panic(err)
+			// clone and start connection
+			f, err := clone(fd)
+			if err != nil {
+				panic(err)
+			}
+
+			c := &conn{
+				session: s,
+				dev:     f,
+			}
+			go c.poll()
+			// todo: add to connection list
+		}
+
+		select {
+		case <-s.starved:
+		case <-s.done:
+			return
 		}
 	}
-
 }
 
 func (s *session) close(ctx context.Context) error {
-	// todo: forceful exit
+	close(s.done)
+	// - close(done)
+	// - if ctx has expired, close connection's file from under it
+	// - close device
 	return s.dev.Close()
 }
 
@@ -130,7 +152,14 @@ type conn struct {
 func (c *conn) poll() {
 	for {
 		if err := c.accept(); err != nil {
+			// todo: on deadline error, determine whether or not to
+			// close connection
 			panic(err)
+		}
+		select {
+		case <-c.done:
+			return
+		default:
 		}
 	}
 }
@@ -141,12 +170,14 @@ func (c *conn) accept() (err error) {
 	defer closeOnErr(c.dev, &err)
 
 	if c.opts.ReadTimeout > 0 {
-		// todo: each time this gets reset, consider
-		// bumping number of workers based on some heuristic
 		deadline := time.Now().Add(c.opts.ReadTimeout)
 		if err := c.dev.SetReadDeadline(deadline); err != nil {
 			panic(err)
 		}
+	}
+
+	if !c.sem.tryAcquire(1) {
+		c.starved <- struct{}{}
 	}
 
 	ctx := c.acquireCtx()
@@ -159,14 +190,17 @@ func (c *conn) accept() (err error) {
 		return fmt.Errorf("unexpected request size: %d", n)
 	}
 
-	c.session.debugf("recv %s {ID:%d NodeID:%d UID:%d GID:%d PID:%d Len:%d}",
+	c.debugf("recv %s {ID:%d NodeID:%d UID:%d GID:%d PID:%d Len:%d}",
 		ctx, ctx.Header.ID, ctx.Header.NodeID, ctx.Header.UID, ctx.Header.GID,
 		ctx.Header.PID, ctx.Header.len)
 
+	// todo: goroutine
 	ctx.off = int(ctx.len)
 	if err := c.handle(ctx); err != nil {
 		return fmt.Errorf("%s: %w", ctx, err)
 	}
+
+	c.sem.release(1)
 	c.releaseCtx(ctx)
 	return nil
 }
@@ -315,9 +349,9 @@ func (c *conn) handle(ctx *Context) error {
 
 	header := ctx.outHeader()
 	*header = proto.OutHeader{
-		Unique: ctx.ID,
-		Error:  -int32(errno),
 		Len:    uint32(headerOutSize + size),
+		Error:  -int32(errno),
+		Unique: ctx.ID,
 	}
 
 	if c.opts.WriteTimeout > 0 {
@@ -327,7 +361,12 @@ func (c *conn) handle(ctx *Context) error {
 		}
 	}
 
-	c.session.debugf("write %s {ID:%d Error:%d Len:%d}",
+	if ctx.Op == proto.GETATTR {
+		buf := ctx.outBuf()[:header.Len]
+		c.debugf("%+v", (*proto.AttrOut)(unsafe.Pointer(&buf[headerOutSize])))
+	}
+
+	c.debugf("write %s {ID:%d Error:%d Len:%d}",
 		ctx, header.Unique, header.Error, header.Len)
 	if _, err = c.dev.Write(ctx.outBuf()[:header.Len]); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)

@@ -170,8 +170,9 @@ func fusectl_waiting(device int) (int, error) {
 	}
 	defer f.Close()
 	buf := make([]byte, 32)
-	if _, err = f.Read(buf); err != nil {
+	n, err := f.Read(buf)
+	if err != nil {
 		return 0, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(buf)))
+	return strconv.Atoi(strings.TrimSpace(string(buf[:n])))
 }

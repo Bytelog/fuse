@@ -38,35 +38,6 @@ func (ctx *Context) in() unsafe.Pointer {
 	return unsafe.Pointer(&ctx.buf[headerInSize])
 }
 
-// pointer to the response data
-func (ctx *Context) out() unsafe.Pointer {
-	return unsafe.Pointer(&ctx.buf[ctx.off+int(headerInSize)])
-}
-
-// pointer to the response buffer, with size bytes zero initialized
-func (ctx *Context) outzero(size uintptr) unsafe.Pointer {
-	start := ctx.off + int(headerOutSize)
-	if size > 0 {
-		buf := ctx.buf[start : start+int(size)]
-		for i := range buf {
-			buf[i] = 0
-		}
-	}
-	return unsafe.Pointer(&ctx.buf[start])
-}
-
-func (ctx *Context) outBuf() []byte {
-	return ctx.buf[ctx.len:]
-}
-
-func (ctx *Context) outData() []byte {
-	return ctx.buf[ctx.len+uint32(headerOutSize):]
-}
-
-func (ctx *Context) outHeader() *proto.OutHeader {
-	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.len]))
-}
-
 func (ctx *Context) bytes(off uintptr) []byte {
 	return ctx.buf[headerInSize+off : ctx.off]
 }
@@ -89,6 +60,35 @@ func (ctx *Context) strings(n int) []string {
 		buf = buf[n+1:]
 	}
 	return s
+}
+
+// pointer to the response data
+func (ctx *Context) out() unsafe.Pointer {
+	return unsafe.Pointer(&ctx.buf[ctx.off+int(headerOutSize)])
+}
+
+// pointer to the response buffer, with size bytes zero initialized
+func (ctx *Context) outzero(size uintptr) unsafe.Pointer {
+	start := ctx.off + int(headerOutSize)
+	if size > 0 {
+		buf := ctx.buf[start : start+int(size)]
+		for i := range buf {
+			buf[i] = 0
+		}
+	}
+	return unsafe.Pointer(&ctx.buf[start])
+}
+
+func (ctx *Context) outBuf() []byte {
+	return ctx.buf[ctx.off:]
+}
+
+func (ctx *Context) outData() []byte {
+	return ctx.buf[ctx.off+int(headerOutSize):]
+}
+
+func (ctx *Context) outHeader() *proto.OutHeader {
+	return (*proto.OutHeader)(unsafe.Pointer(&ctx.buf[ctx.off]))
 }
 
 // bump the input buffer size and memclr the affected bytes

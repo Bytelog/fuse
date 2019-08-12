@@ -115,11 +115,13 @@ func (s *Server) Serve(fs Filesystem, target string) (err error) {
 	}
 	s.target = target
 	s.session = &session{
-		logger: s.logger,
-		fs:     fs,
-		opts:   defaultOpts,
-		errc:   make(chan error, 1),
-		sem:    semaphore{avail: 1},
+		logger:  s.logger,
+		fs:      fs,
+		opts:    defaultOpts,
+		errc:    make(chan error, 1),
+		sem:     semaphore{},
+		done:    make(chan struct{}),
+		starved: make(chan struct{}, 1),
 	}
 	return s.session.start(dev)
 }
