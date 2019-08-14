@@ -178,8 +178,8 @@ func fusectl_waiting(device int) (int, error) {
 		return 0, err
 	}
 	defer f.Close()
-	buf := make([]byte, 32)
-	n, err := f.Read(buf)
+	var buf [16]byte
+	n, err := f.Read(buf[:])
 	if err != nil {
 		return 0, err
 	}
