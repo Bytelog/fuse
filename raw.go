@@ -101,7 +101,6 @@ func (s *session) control(dev *os.File) {
 		max = 1
 	)
 
-	fd := dev.Fd()
 	count := 0
 
 	for {
@@ -112,7 +111,7 @@ func (s *session) control(dev *os.File) {
 			count++
 
 			// clone and start connection
-			f, err := clone(fd)
+			f, err := clone(dev)
 			if err != nil {
 				panic(err)
 			}

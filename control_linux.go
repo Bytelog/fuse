@@ -114,19 +114,28 @@ func unixPair(typ int) (pair [2]*os.File, err error) {
 	return
 }
 
-func clone(fd uintptr) (*os.File, error) {
-	clone, err := unix.Open("/dev/fuse", unix.O_RDWR|unix.O_CLOEXEC, 0755)
+func clone(dev *os.File) (clone *os.File, err error) {
+	cloneFD, err := unix.Open("/dev/fuse", unix.O_RDWR|unix.O_CLOEXEC, 0755)
 	if err != nil {
 		return nil, err
 	}
-	err = unix.IoctlSetPointerInt(clone, uint(proto.DEV_IOC_CLONE), int(fd))
+	defer closeOnErr(clone, &err)
+	rawConn, err := dev.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
-	if err := unix.SetNonblock(clone, true); err != nil {
+	var rawErr error
+	err = rawConn.Control(func(fd uintptr) {
+		req := uint(proto.DEV_IOC_CLONE)
+		rawErr = unix.IoctlSetPointerInt(cloneFD, req, int(fd))
+	})
+	if err = firstErr(err, rawErr); err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(clone), "/dev/fuse"), nil
+	if err := unix.SetNonblock(cloneFD, true); err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(cloneFD), "/dev/fuse"), nil
 }
 
 func deviceNumber(target string) (int, error) {
@@ -175,4 +184,13 @@ func fusectl_waiting(device int) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(buf[:n])))
+}
+
+func firstErr(errors ...error) error {
+	for _, err := range errors {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
